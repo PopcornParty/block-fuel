@@ -66,27 +66,27 @@ jobs:
             -w voice.wav
 
       - name: Create cinematic background
-        run: |
+        
+
+      - name: Create captions
+        run: |      - name: Create Minecraft cinematic background
+  
           ffmpeg -y \
             -f lavfi \
-            -i "color=c=#10151f:s=1080x1920:r=30" \
-            -f lavfi \
-            -i "noise=alls=12:allf=t+u" \
-            -filter_complex "
-              [0:v]format=rgba,
-              geq=
-              r='20+25*sin(X/90+T*2)':
-              g='30+35*sin(Y/110+T*1.5)':
-              b='55+45*sin((X+Y)/160+T*1.2)'
-              [bg];
-              [1:v]scale=1080:1920,format=rgba,colorchannelmixer=aa=0.10[noise];
-              [bg][noise]overlay=shortest=1
+            -i "color=c=#182b18:s=1080x1920:r=30" \
+            -vf "
+              drawbox=x=0:y=0:w=1080:h=1920:color=#182b18@1:t=fill,
+              drawbox=x=80:y=500:w=920:h=850:color=#315c32@1:t=fill,
+              drawbox=x=160:y=650:w=760:h=500:color=#4b7d3d@1:t=fill,
+              drawbox=x=0:y=1350:w=1080:h=570:color=#243b1f@1:t=fill,
+              drawbox=x=300:y=420:w=160:h=700:color=#6b4226@1:t=fill,
+              drawbox=x=620:y=350:w=180:h=770:color=#6b4226@1:t=fill,
+              drawbox=x=330:y=300:w=100:h=120:color=#246b32@1:t=fill,
+              drawbox=x=700:y=250:w=110:h=130:color=#246b32@1:t=fill,
+              drawbox=x=0:y=0:w=1080:h=1920:color=black@0.25:t=fill
             " \
             -t 25 \
             background.mp4
-
-      - name: Create captions
-        run: |
           python - <<'PY'
           import textwrap
 
