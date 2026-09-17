@@ -33,9 +33,10 @@ jobs:
           )
 
           prompt = """Minecraft fact for a short cinematic YouTube Short.
-          Start with a strong hook. Give one interesting Minecraft fact.
+          Start with a strong hook.
+          Give one interesting real Minecraft fact.
           Keep it exciting and suitable for a family-friendly audience.
-          End with a memorable final sentence.
+          End with: Follow for more Minecraft facts.
           """
 
           result = generator(
@@ -65,12 +66,8 @@ jobs:
             -f script.txt \
             -w voice.wav
 
-      - name: Create cinematic background
-        
-
-      - name: Create captions
-        run: |      - name: Create Minecraft cinematic background
-  
+      - name: Create Minecraft cinematic background
+        run: |
           ffmpeg -y \
             -f lavfi \
             -i "color=c=#182b18:s=1080x1920:r=30" \
@@ -87,13 +84,15 @@ jobs:
             " \
             -t 25 \
             background.mp4
-          python - <<'PY'
-          import textwrap
 
+      - name: Create captions
+        run: |
+          python - <<'PY'
           text = open("script.txt").read().strip()
           words = text.split()
 
           lines = []
+
           for i in range(0, len(words), 7):
               lines.append(" ".join(words[i:i+7]))
 
