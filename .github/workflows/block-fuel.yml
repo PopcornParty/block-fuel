@@ -10,8 +10,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test automatic run
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install AI tools
         run: |
-          echo "🔥 BLOCK FUEL AUTOMATION"
-          echo "Started: $(date)"
-          echo "Generating a Minecraft Short..."
+          pip install transformers torch
+
+      - name: Generate Minecraft idea
+        run: |
+          python - <<'PY'
+          from transformers import pipeline
+
+          generator = pipeline(
+              "text-generation",
+              model="distilgpt2"
+          )
+
+          prompt = (
+              "Minecraft YouTube Short idea: "
+              "A player discovers something surprising in Minecraft."
+          )
+
+          result = generator(
+              prompt,
+              max_new_tokens=60,
+              do_sample=True
+          )
+
+          print("\n🔥 BLOCK FUEL IDEA 🔥")
+          print(result[0]["generated_text"])
+          PY
