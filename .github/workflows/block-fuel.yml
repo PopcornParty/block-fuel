@@ -1,0 +1,16 @@
+name: Block Fuel
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Block Fuel
+        run: |
+          echo "🔥 Block Fuel is running!"
+          echo "Time: $(date)"
