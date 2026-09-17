@@ -1,61 +1,72 @@
 name: Block Fuel
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "*/30 * * * *"
-
 jobs:
   block-fuel:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu
-          pip install transformers torch
-
-      - name: Generate Minecraft script
+          pip install requests
+      - name: Get verified Minecraft fact
         run: |
           python - <<'PY'
-          from transformers import pipeline
-
-          generator = pipeline(
-              "text-generation",
-              model="distilgpt2"
+          import random
+          facts = [
+              {
+                  "hook": "Did you know Minecraft has a block that can move without being pushed?",
+                  "fact": "The piston can push blocks when powered by redstone, making it one of the most important building blocks for Minecraft machines."
+              },
+              {
+                  "hook": "Here's a Minecraft fact you might not know.",
+                  "fact": "Creepers were created because a pig model was accidentally made with the wrong proportions. The mistake eventually became one of Minecraft's most famous mobs."
+              },
+              {
+                  "hook": "This Minecraft mechanic is seriously useful.",
+                  "fact": "Water can be used to stop fall damage when you land in it, even from a very large height, as long as you reach the water safely."
+              },
+              {
+                  "hook": "Minecraft has a surprisingly useful hidden trick.",
+                  "fact": "Sneaking prevents players from walking off the edge of a full block, which makes building over dangerous drops much safer."
+              },
+              {
+                  "hook": "Ever wondered why Minecraft worlds can be so huge?",
+                  "fact": "Minecraft worlds are generated procedurally, meaning the game creates terrain using algorithms instead of storing every possible world as one enormous map."
+              },
+              {
+                  "hook": "Here's something interesting about Minecraft villagers.",
+                  "fact": "Villagers can take different professions depending on nearby job-site blocks, such as a lectern for a librarian or a blast furnace for an armorer."
+              },
+              {
+                  "hook": "This Minecraft fact explains a lot about Nether travel.",
+                  "fact": "One block travelled in the Nether corresponds to eight blocks of horizontal distance in the Overworld."
+              },
+              {
+                  "hook": "Minecraft's End dimension has a very important structure.",
+                  "fact": "End Cities can contain valuable loot and are one of the places where players can find an Elytra."
+              }
+          ]
+          fact = random.choice(facts)
+          script = (
+              fact["hook"]
+              + " "
+              + fact["fact"]
+              + " "
+              + "Follow for more Minecraft facts."
           )
-
-          prompt = """Minecraft fact for a short cinematic YouTube Short.
-          Start with a strong hook.
-          Give one interesting real Minecraft fact.
-          Keep it exciting and suitable for a family-friendly audience.
-          End with: Follow for more Minecraft facts.
-          """
-
-          result = generator(
-              prompt,
-              max_new_tokens=100,
-              do_sample=True,
-              temperature=0.9
-          )
-
-          text = result[0]["generated_text"]
-          text = text.replace("\n", " ").strip()
-
-          print("SCRIPT:")
-          print(text)
-
+          print(script)
           with open("script.txt", "w") as f:
-              f.write(text)
+              f.write(script)
           PY
-
       - name: Generate male voice
         run: |
           espeak-ng \
@@ -65,42 +76,42 @@ jobs:
             -a 150 \
             -f script.txt \
             -w voice.wav
-
-      - name: Create Minecraft cinematic background
+      - name: Create Minecraft cinematic visuals
         run: |
           ffmpeg -y \
             -f lavfi \
-            -i "color=c=#182b18:s=1080x1920:r=30" \
-            -vf "
-              drawbox=x=0:y=0:w=1080:h=1920:color=#182b18@1:t=fill,
-              drawbox=x=80:y=500:w=920:h=850:color=#315c32@1:t=fill,
-              drawbox=x=160:y=650:w=760:h=500:color=#4b7d3d@1:t=fill,
-              drawbox=x=0:y=1350:w=1080:h=570:color=#243b1f@1:t=fill,
-              drawbox=x=300:y=420:w=160:h=700:color=#6b4226@1:t=fill,
-              drawbox=x=620:y=350:w=180:h=770:color=#6b4226@1:t=fill,
-              drawbox=x=330:y=300:w=100:h=120:color=#246b32@1:t=fill,
-              drawbox=x=700:y=250:w=110:h=130:color=#246b32@1:t=fill,
-              drawbox=x=0:y=0:w=1080:h=1920:color=black@0.25:t=fill
+            -i "color=c=#101820:s=1080x1920:r=30" \
+            -filter_complex "
+              drawbox=x=0:y=0:w=1080:h=1920:color=#101820@1:t=fill,
+              drawbox=x=0:y=1000:w=1080:h=920:color=#1d301d@1:t=fill,
+              drawbox=x=0:y=1450:w=1080:h=470:color=#263b22@1:t=fill,
+              drawbox=x=90:y=1100:w=900:h=90:color=#315b2d@1:t=fill,
+              drawbox=x=180:y=1010:w=720:h=90:color=#315b2d@1:t=fill,
+              drawbox=x=270:y=920:w=540:h=90:color=#315b2d@1:t=fill,
+              drawbox=x=170:y=400:w=120:h=620:color=#674126@1:t=fill,
+              drawbox=x=790:y=300:w=130:h=720:color=#674126@1:t=fill,
+              drawbox=x=120:y=300:w=220:h=130:color=#23652d@1:t=fill,
+              drawbox=x=40:y=410:w=250:h=130:color=#23652d@1:t=fill,
+              drawbox=x=730:y=200:w=250:h=130:color=#23652d@1:t=fill,
+              drawbox=x=820:y=330:w=220:h=130:color=#23652d@1:t=fill,
+              drawbox=x=430:y=720:w=220:h=220:color=#7b5a32@1:t=fill,
+              drawbox=x=465:y=755:w=150:h=150:color=#a17a45@1:t=fill,
+              drawbox=x=0:y=0:w=1080:h=1920:color=black@0.18:t=fill
             " \
             -t 25 \
             background.mp4
-
-      - name: Create captions
+      - name: Create caption file
         run: |
           python - <<'PY'
           text = open("script.txt").read().strip()
           words = text.split()
-
           lines = []
-
-          for i in range(0, len(words), 7):
-              lines.append(" ".join(words[i:i+7]))
-
+          for i in range(0, len(words), 6):
+              lines.append(" ".join(words[i:i+6]))
           with open("captions.txt", "w") as f:
               for line in lines:
                   f.write(line + "\n")
           PY
-
       - name: Create cinematic music
         run: |
           ffmpeg -y \
@@ -111,15 +122,14 @@ jobs:
             -f lavfi \
             -i "sine=frequency=220:duration=25" \
             -filter_complex "
-              [0:a]volume=0.05[a];
-              [1:a]volume=0.035[b];
-              [2:a]volume=0.025[c];
+              [0:a]volume=0.035[a];
+              [1:a]volume=0.025[b];
+              [2:a]volume=0.018[c];
               [a][b][c]amix=inputs=3:duration=longest,
               aecho=0.8:0.9:500:0.2
             " \
             music.wav
-
-      - name: Build vertical Short
+      - name: Build finished Short
         run: |
           ffmpeg -y \
             -i background.mp4 \
@@ -129,16 +139,15 @@ jobs:
               [0:v]
               drawtext=
               fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
-              text='BLOCK FUEL':
-              fontsize=72:
+              text='MINECRAFT FACT':
+              fontsize=58:
               fontcolor=white:
               x=(w-text_w)/2:
-              y=120:
+              y=100:
               shadowcolor=black:
               shadowx=4:
               shadowy=4
               [v];
-
               [1:a]volume=1.0[voice];
               [2:a]volume=0.18[music];
               [voice][music]amix=inputs=2:duration=first[a]
@@ -154,7 +163,6 @@ jobs:
             -pix_fmt yuv420p \
             -movflags +faststart \
             block-fuel-short.mp4
-
       - name: Save finished Short
         uses: actions/upload-artifact@v4
         with:
@@ -162,3 +170,4 @@ jobs:
           path: |
             block-fuel-short.mp4
             script.txt
+            captions.txt
