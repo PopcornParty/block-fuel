@@ -1,12 +1,17 @@
 name: Block Fuel
 
 on:
-  push:
   workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
 
 jobs:
-  test:
+  block-fuel:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Test
-        run: echo "🔥 Block Fuel works!"
+      - name: Test automatic run
+        run: |
+          echo "🔥 BLOCK FUEL AUTOMATION"
+          echo "Started: $(date)"
+          echo "Generating a Minecraft Short..."
