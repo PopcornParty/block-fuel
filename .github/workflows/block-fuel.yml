@@ -3,11 +3,12 @@ name: Block Fuel
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
 
 jobs:
   block-fuel:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Set up Python
@@ -15,11 +16,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install AI tools
+      - name: Install tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu
           pip install transformers torch
 
-      - name: Generate Minecraft idea
+      - name: Generate Minecraft script
         run: |
           python - <<'PY'
           from transformers import pipeline
@@ -29,17 +32,134 @@ jobs:
               model="distilgpt2"
           )
 
-          prompt = (
-              "Minecraft YouTube Short idea: "
-              "A player discovers something surprising in Minecraft."
-          )
+          prompt = """Minecraft fact for a short cinematic YouTube Short.
+          Start with a strong hook. Give one interesting Minecraft fact.
+          Keep it exciting and suitable for a family-friendly audience.
+          End with a memorable final sentence.
+          """
 
           result = generator(
               prompt,
-              max_new_tokens=60,
-              do_sample=True
+              max_new_tokens=100,
+              do_sample=True,
+              temperature=0.9
           )
 
-          print("\n🔥 BLOCK FUEL IDEA 🔥")
-          print(result[0]["generated_text"])
+          text = result[0]["generated_text"]
+          text = text.replace("\n", " ").strip()
+
+          print("SCRIPT:")
+          print(text)
+
+          with open("script.txt", "w") as f:
+              f.write(text)
           PY
+
+      - name: Generate male voice
+        run: |
+          espeak-ng \
+            -v en-us+m3 \
+            -s 155 \
+            -p 35 \
+            -a 150 \
+            -f script.txt \
+            -w voice.wav
+
+      - name: Create cinematic background
+        run: |
+          ffmpeg -y \
+            -f lavfi \
+            -i "color=c=#10151f:s=1080x1920:r=30" \
+            -f lavfi \
+            -i "noise=alls=12:allf=t+u" \
+            -filter_complex "
+              [0:v]format=rgba,
+              geq=
+              r='20+25*sin(X/90+T*2)':
+              g='30+35*sin(Y/110+T*1.5)':
+              b='55+45*sin((X+Y)/160+T*1.2)'
+              [bg];
+              [1:v]scale=1080:1920,format=rgba,colorchannelmixer=aa=0.10[noise];
+              [bg][noise]overlay=shortest=1
+            " \
+            -t 25 \
+            background.mp4
+
+      - name: Create captions
+        run: |
+          python - <<'PY'
+          import textwrap
+
+          text = open("script.txt").read().strip()
+          words = text.split()
+
+          lines = []
+          for i in range(0, len(words), 7):
+              lines.append(" ".join(words[i:i+7]))
+
+          with open("captions.txt", "w") as f:
+              for line in lines:
+                  f.write(line + "\n")
+          PY
+
+      - name: Create cinematic music
+        run: |
+          ffmpeg -y \
+            -f lavfi \
+            -i "sine=frequency=110:duration=25" \
+            -f lavfi \
+            -i "sine=frequency=165:duration=25" \
+            -f lavfi \
+            -i "sine=frequency=220:duration=25" \
+            -filter_complex "
+              [0:a]volume=0.05[a];
+              [1:a]volume=0.035[b];
+              [2:a]volume=0.025[c];
+              [a][b][c]amix=inputs=3:duration=longest,
+              aecho=0.8:0.9:500:0.2
+            " \
+            music.wav
+
+      - name: Build vertical Short
+        run: |
+          ffmpeg -y \
+            -i background.mp4 \
+            -i voice.wav \
+            -i music.wav \
+            -filter_complex "
+              [0:v]
+              drawtext=
+              fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
+              text='BLOCK FUEL':
+              fontsize=72:
+              fontcolor=white:
+              x=(w-text_w)/2:
+              y=120:
+              shadowcolor=black:
+              shadowx=4:
+              shadowy=4
+              [v];
+
+              [1:a]volume=1.0[voice];
+              [2:a]volume=0.18[music];
+              [voice][music]amix=inputs=2:duration=first[a]
+            " \
+            -map "[v]" \
+            -map "[a]" \
+            -shortest \
+            -c:v libx264 \
+            -preset veryfast \
+            -crf 23 \
+            -c:a aac \
+            -b:a 128k \
+            -pix_fmt yuv420p \
+            -movflags +faststart \
+            block-fuel-short.mp4
+
+      - name: Save finished Short
+        uses: actions/upload-artifact@v4
+        with:
+          name: block-fuel-short
+          path: |
+            block-fuel-short.mp4
+            script.txt
