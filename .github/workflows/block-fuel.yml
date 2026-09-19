@@ -1,340 +1,456 @@
 name: Block Fuel
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
-concurrency:
-  group: block-fuel
-  cancel-in-progress: false
+    - cron: "0 */1 * * *"
+
 jobs:
-  block-fuel:
+  create-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Install tools
+
+      - name: Install FFmpeg and voice tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu
-          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
-      # ---------------------------------------------------------
-      # VERIFIED MINECRAFT FACT
-      # ---------------------------------------------------------
-      - name: Choose Minecraft fact
+
+      - name: Install Python packages
         run: |
-          python - <<'PY'
+          python -m pip install --upgrade pip
+          pip install pillow numpy
+
+      - name: Generate Block Fuel Short
+        shell: bash
+        run: |
+          cat > create_video.py <<'PY'
+          import os
           import random
-          import json
+          import math
+          import wave
+          import subprocess
+          from PIL import Image, ImageDraw, ImageFont
+          import numpy as np
+
+          WIDTH = 1080
+          HEIGHT = 1920
+          FPS = 30
+          DURATION = 20
+
+          os.makedirs("output", exist_ok=True)
+
+          # ---------------------------------------------------------
+          # REAL MINECRAFT FACTS
+          # ---------------------------------------------------------
+
           facts = [
               {
-                  "hook": "Here's a Minecraft fact that can save you a lot of time.",
-                  "fact": "One block travelled horizontally in the Nether is equivalent to eight blocks in the Overworld."
+                  "hook": "Did you know Minecraft has a mob that can pick up blocks?",
+                  "body": "Endermen can pick up certain blocks and place them somewhere else.",
+                  "ending": "That's one reason you can sometimes find blocks where they shouldn't be."
               },
               {
-                  "hook": "Did you know Minecraft has a dimension where distance works differently?",
-                  "fact": "The Nether lets players travel eight times the horizontal distance of the Overworld using the same number of blocks travelled."
+                  "hook": "Here's a strange Minecraft fact.",
+                  "body": "Creepers were created because the developer accidentally made a pig with the wrong dimensions.",
+                  "ending": "That mistake eventually became one of Minecraft's most famous mobs."
               },
               {
-                  "hook": "This Minecraft mechanic is incredibly useful when building.",
-                  "fact": "Sneaking prevents a player from walking off the edge of a full block, which makes it useful when building near drops."
+                  "hook": "Minecraft's Nether has a weird connection to distance.",
+                  "body": "One block travelled in the Nether corresponds to eight blocks travelled in the Overworld.",
+                  "ending": "That's why Nether portals can be used for fast travel."
               },
               {
-                  "hook": "Here's why redstone machines are possible in Minecraft.",
-                  "fact": "Redstone can transmit power through Minecraft components, allowing players to create mechanisms and automated machines."
+                  "hook": "Did you know Minecraft's first version wasn't called Minecraft?",
+                  "body": "The game was originally called Cave Game during its early development.",
+                  "ending": "The name Minecraft came later."
               },
               {
-                  "hook": "Minecraft worlds aren't simply giant maps stored in one file.",
-                  "fact": "Minecraft generates terrain procedurally, using algorithms to create different parts of a world as they are generated."
+                  "hook": "Here's a useful Minecraft fact.",
+                  "body": "Water can flow up to eight blocks horizontally from its source in the Overworld.",
+                  "ending": "That's why water streams can travel surprisingly far."
               },
               {
-                  "hook": "Villagers can actually change professions.",
-                  "fact": "Villagers can take professions by claiming compatible job-site blocks, such as a lectern for a librarian."
+                  "hook": "Ever wondered why Creepers are green?",
+                  "body": "The Creeper's appearance became iconic because of its unusual tall, green design.",
+                  "ending": "And today, it's one of the most recognisable Minecraft mobs."
               },
               {
-                  "hook": "Ever wondered where Elytras come from?",
-                  "fact": "Elytras can be found in End Cities, inside End Ships."
+                  "hook": "Minecraft has a mob that can teleport.",
+                  "body": "Endermen can teleport when they move around, making them difficult to trap.",
+                  "ending": "Just don't look directly into their eyes."
               },
               {
-                  "hook": "Here's a useful Minecraft water mechanic.",
-                  "fact": "Landing in water can prevent fall damage, making water useful for surviving falls when you can reach it safely."
+                  "hook": "Here's something you might not know about Minecraft.",
+                  "body": "A Minecraft day and night cycle lasts about twenty minutes in real time.",
+                  "ending": "So one Minecraft day is much faster than a real day."
               }
           ]
-          chosen = random.choice(facts)
+
+          fact = random.choice(facts)
+
           script = (
-              chosen["hook"]
-              + " "
-              + chosen["fact"]
-              + " "
+              fact["hook"] + " "
+              + fact["body"] + " "
+              + fact["ending"] + " "
               + "Follow for more Minecraft facts."
           )
-          data = {
-              "hook": chosen["hook"],
-              "fact": chosen["fact"],
-              "script": script
-          }
-          with open("fact.json", "w") as f:
-              json.dump(data, f)
-          with open("script.txt", "w") as f:
+
+          with open("output/script.txt", "w", encoding="utf-8") as f:
               f.write(script)
-          print("FACT:")
-          print(script)
-          PY
-      # ---------------------------------------------------------
-      # VOICE
-      # ---------------------------------------------------------
-      - name: Generate male voice
-        run: |
-          espeak-ng \
-            -v en-us+m3 \
-            -s 155 \
-            -p 35 \
-            -a 150 \
-            -f script.txt \
-            -w voice.wav
-      # ---------------------------------------------------------
-      # CAPTIONS
-      # ---------------------------------------------------------
-      - name: Create captions
-        run: |
-          python - <<'PY'
-          import re
-          text = open("script.txt").read().strip()
-          words = text.split()
-          # Estimate timing from the number of words.
-          total_words = max(len(words), 1)
-          total_duration = max(total_words / 2.35, 8.0)
-          chunks = []
-          for i in range(0, len(words), 5):
-              chunks.append(words[i:i+5])
-          chunk_duration = total_duration / len(chunks)
+
+          # ---------------------------------------------------------
+          # TITLE + DESCRIPTION
+          # ---------------------------------------------------------
+
+          title = fact["hook"].replace("Did you know ", "").strip()
+
+          description = (
+              "Minecraft fact: " + fact["body"] + "\n\n"
+              "#Minecraft #MinecraftFacts #Gaming #Shorts"
+          )
+
+          with open("output/title.txt", "w", encoding="utf-8") as f:
+              f.write(title[:95])
+
+          with open("output/description.txt", "w", encoding="utf-8") as f:
+              f.write(description)
+
+          # ---------------------------------------------------------
+          # VOICE
+          # ---------------------------------------------------------
+
+          subprocess.run([
+              "espeak-ng",
+              "-v", "en-us+m3",
+              "-s", "155",
+              "-p", "45",
+              "-a", "170",
+              "-w", "output/voice.wav",
+              script
+          ], check=True)
+
+          # ---------------------------------------------------------
+          # CAPTIONS
+          # ---------------------------------------------------------
+
+          words = script.split()
+
+          # Rough timing based on number of words.
+          total_words = len(words)
+          seconds_per_word = DURATION / max(total_words, 1)
+
           def timestamp(seconds):
               hours = int(seconds // 3600)
               minutes = int((seconds % 3600) // 60)
-              secs = seconds % 60
-              return f"{hours}:{minutes:02d}:{secs:05.2f}".replace(".", ",")
-          with open("captions.srt", "w") as f:
-              for i, chunk in enumerate(chunks, 1):
-                  start = (i - 1) * chunk_duration
-                  end = i * chunk_duration
-                  line = " ".join(chunk)
-                  f.write(f"{i}\n")
+              secs = int(seconds % 60)
+              millis = int((seconds - int(seconds)) * 1000)
+              return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+          with open("output/captions.srt", "w", encoding="utf-8") as f:
+              caption_number = 1
+
+              for i in range(0, len(words), 6):
+                  chunk = words[i:i+6]
+
+                  start = i * seconds_per_word
+                  end = min((i + len(chunk)) * seconds_per_word, DURATION)
+
+                  f.write(f"{caption_number}\n")
                   f.write(f"{timestamp(start)} --> {timestamp(end)}\n")
-                  f.write(f"{line}\n\n")
-          PY
-      # ---------------------------------------------------------
-      # CINEMATIC MINECRAFT-STYLE VISUAL
-      # ---------------------------------------------------------
-      - name: Create cinematic visual
-        run: |
-          ffmpeg -y \
-            -f lavfi \
-            -i "color=c=#101820:s=1080x1920:r=30" \
-            -filter_complex "
-              drawbox=x=0:y=0:w=1080:h=1920:color=#101820@1:t=fill,
-              drawbox=x=0:y=1050:w=1080:h=870:color=#1d301d@1:t=fill,
-              drawbox=x=0:y=1480:w=1080:h=440:color=#263b22@1:t=fill,
-              drawbox=x=90:y=1100:w=900:h=90:color=#315b2d@1:t=fill,
-              drawbox=x=180:y=1010:w=720:h=90:color=#315b2d@1:t=fill,
-              drawbox=x=270:y=920:w=540:h=90:color=#315b2d@1:t=fill,
-              drawbox=x=170:y=400:w=120:h=620:color=#674126@1:t=fill,
-              drawbox=x=790:y=300:w=130:h=720:color=#674126@1:t=fill,
-              drawbox=x=100:y=300:w=230:h=130:color=#23652d@1:t=fill,
-              drawbox=x=40:y=420:w=250:h=130:color=#23652d@1:t=fill,
-              drawbox=x=735:y=200:w=250:h=130:color=#23652d@1:t=fill,
-              drawbox=x=820:y=330:w=220:h=130:color=#23652d@1:t=fill,
-              drawbox=x=430:y=720:w=220:h=220:color=#7b5a32@1:t=fill,
-              drawbox=x=465:y=755:w=150:h=150:color=#a17a45@1:t=fill,
-              drawbox=x=0:y=0:w=1080:h=1920:color=black@0.18:t=fill,
-              zoompan=
-              z='min(zoom+0.0007,1.08)':
-              x='iw/2-(iw/zoom/2)':
-              y='ih/2-(ih/zoom/2)':
-              d=1:
-              s=1080x1920:
-              fps=30
-            " \
-            -t 25 \
-            -c:v libx264 \
-            -pix_fmt yuv420p \
-            background.mp4
-      # ---------------------------------------------------------
-      # CINEMATIC MUSIC
-      # ---------------------------------------------------------
-      - name: Create music
-        run: |
-          ffmpeg -y \
-            -f lavfi \
-            -i "sine=frequency=110:duration=25" \
-            -f lavfi \
-            -i "sine=frequency=165:duration=25" \
-            -f lavfi \
-            -i "sine=frequency=220:duration=25" \
-            -filter_complex "
-              [0:a]volume=0.035[a];
-              [1:a]volume=0.025[b];
-              [2:a]volume=0.018[c];
-              [a][b][c]amix=inputs=3:duration=longest,
-              aecho=0.8:0.9:500:0.2
-            " \
-            music.wav
-      # ---------------------------------------------------------
-      # BUILD FINAL SHORT
-      # ---------------------------------------------------------
-      - name: Build final Short
-        run: |
-          ffmpeg -y \
-            -i background.mp4 \
-            -i voice.wav \
-            -i music.wav \
-            -filter_complex "
-              [0:v]
-              subtitles=captions.srt:
-              force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginV=300'
-              [captioned];
-              [captioned]
-              drawtext=
-              fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
-              text='MINECRAFT FACT':
-              fontsize=58:
-              fontcolor=white:
-              x=(w-text_w)/2:
-              y=100:
-              shadowcolor=black:
-              shadowx=4:
-              shadowy=4
-              [v];
-              [1:a]volume=1.0[voice];
-              [2:a]volume=0.16[music];
-              [voice][music]
-              amix=inputs=2:duration=first
-              [a]
-            " \
-            -map "[v]" \
-            -map "[a]" \
-            -shortest \
-            -c:v libx264 \
-            -preset veryfast \
-            -crf 23 \
-            -c:a aac \
-            -b:a 128k \
-            -pix_fmt yuv420p \
-            -movflags +faststart \
-            block-fuel-short.mp4
-      # ---------------------------------------------------------
-      # CREATE YOUTUBE TITLE + DESCRIPTION
-      # ---------------------------------------------------------
-      - name: Create YouTube metadata
-        run: |
-          python - <<'PY'
-          import json
-          data = json.load(open("fact.json"))
-          title = data["hook"]
-          if len(title) > 95:
-              title = "Minecraft Fact You Probably Didn't Know"
-          description = (
-              data["fact"]
-              + "\n\n"
-              + "Follow for more Minecraft facts!\n\n"
-              + "#Minecraft #MinecraftFacts #Shorts"
-          )
-          with open("youtube_title.txt", "w") as f:
-              f.write(title)
-          with open("youtube_description.txt", "w") as f:
-              f.write(description)
-          print("TITLE:", title)
-          print("DESCRIPTION:")
-          print(description)
-          PY
-      # ---------------------------------------------------------
-      # YOUTUBE UPLOAD SCRIPT
-      #
-      # This is ready for OAuth.
-      # It only uploads when the YOUTUBE_TOKEN_JSON secret exists.
-      # ---------------------------------------------------------
-      - name: Create YouTube uploader
-        run: |
-          cat > upload_youtube.py <<'PY'
-          import os
-          import json
-          from google.oauth2.credentials import Credentials
-          from googleapiclient.discovery import build
-          from googleapiclient.http import MediaFileUpload
-          TOKEN = os.environ.get("YOUTUBE_TOKEN_JSON")
-          if not TOKEN:
-              print("YOUTUBE_TOKEN_JSON is not configured.")
-              print("Short created successfully, but YouTube upload was skipped.")
-              raise SystemExit(0)
-          token_data = json.loads(TOKEN)
-          credentials = Credentials.from_authorized_user_info(
-              token_data,
-              scopes=["https://www.googleapis.com/auth/youtube.upload"]
-          )
-          youtube = build(
-              "youtube",
-              "v3",
-              credentials=credentials
-          )
-          title = open("youtube_title.txt").read().strip()
-          description = open("youtube_description.txt").read().strip()
-          body = {
-              "snippet": {
-                  "title": title,
-                  "description": description,
-                  "categoryId": "20"
-              },
-              "status": {
-                  "privacyStatus": "public",
-                  "selfDeclaredMadeForKids": False
-              }
-          }
-          media = MediaFileUpload(
-              "block-fuel-short.mp4",
-              mimetype="video/mp4",
-              resumable=True
-          )
-          request = youtube.videos().insert(
-              part="snippet,status",
-              body=body,
-              media_body=media
-          )
-          response = None
-          while response is None:
-              status, response = request.next_chunk()
-              if status:
-                  print(
-                      "YouTube upload progress:",
-                      int(status.progress() * 100),
-                      "%"
+                  f.write(" ".join(chunk) + "\n\n")
+
+                  caption_number += 1
+
+          # ---------------------------------------------------------
+          # CINEMATIC MINECRAFT-STYLE VISUAL
+          # ---------------------------------------------------------
+
+          frames_dir = "frames"
+          os.makedirs(frames_dir, exist_ok=True)
+
+          font_paths = [
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+          ]
+
+          font_path = font_paths[0]
+
+          big_font = ImageFont.truetype(font_path, 70)
+          small_font = ImageFont.truetype(font_path, 42)
+
+          total_frames = DURATION * FPS
+
+          for frame in range(total_frames):
+              t = frame / FPS
+
+              img = Image.new("RGB", (WIDTH, HEIGHT), (20, 30, 40))
+              draw = ImageDraw.Draw(img)
+
+              # Sky gradient
+              for y in range(HEIGHT):
+                  ratio = y / HEIGHT
+
+                  r = int(25 + 30 * ratio)
+                  g = int(55 + 25 * ratio)
+                  b = int(90 + 10 * ratio)
+
+                  draw.line(
+                      [(0, y), (WIDTH, y)],
+                      fill=(r, g, b)
                   )
-          print("SUCCESS!")
-          print("YouTube video ID:", response["id"])
-          print(
-              "https://www.youtube.com/watch?v="
-              + response["id"]
+
+              # Sun
+              sun_x = int(WIDTH * 0.75)
+              sun_y = int(HEIGHT * 0.22)
+
+              draw.ellipse(
+                  [
+                      sun_x - 100,
+                      sun_y - 100,
+                      sun_x + 100,
+                      sun_y + 100
+                  ],
+                  fill=(255, 220, 120)
+              )
+
+              # Ground
+              ground_y = int(HEIGHT * 0.68)
+
+              draw.rectangle(
+                  [0, ground_y, WIDTH, HEIGHT],
+                  fill=(55, 105, 55)
+              )
+
+              # Minecraft-like grass blocks
+              block_size = 120
+
+              for x in range(-block_size, WIDTH + block_size, block_size):
+                  for y in range(ground_y, HEIGHT, block_size):
+                      offset = int(math.sin(t * 0.8 + x * 0.01) * 4)
+
+                      draw.rectangle(
+                          [
+                              x,
+                              y + offset,
+                              x + block_size - 4,
+                              y + block_size - 4 + offset
+                          ],
+                          fill=(75, 125, 65)
+                      )
+
+                      draw.rectangle(
+                          [
+                              x,
+                              y + offset,
+                              x + block_size - 4,
+                              y + 15 + offset
+                          ],
+                          fill=(100, 160, 75)
+                      )
+
+              # Large cinematic blocky mountain
+              mountain_points = [
+                  (0, ground_y),
+                  (170, 900),
+                  (330, 1080),
+                  (500, 760),
+                  (670, 1030),
+                  (830, 820),
+                  (1080, 980),
+                  (1080, ground_y)
+              ]
+
+              draw.polygon(
+                  mountain_points,
+                  fill=(45, 60, 70)
+              )
+
+              # Trees
+              for tree_x in [130, 870]:
+                  trunk_top = ground_y - 300
+
+                  draw.rectangle(
+                      [
+                          tree_x - 25,
+                          trunk_top,
+                          tree_x + 25,
+                          ground_y
+                      ],
+                      fill=(90, 55, 30)
+                  )
+
+                  draw.rectangle(
+                      [
+                          tree_x - 110,
+                          trunk_top - 100,
+                          tree_x + 110,
+                          trunk_top + 100
+                      ],
+                      fill=(30, 90, 45)
+                  )
+
+              # Moving cinematic camera effect
+              camera_x = int(math.sin(t * 0.6) * 25)
+
+              overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+              odraw = ImageDraw.Draw(overlay)
+
+              # Dark cinematic bars
+              odraw.rectangle(
+                  [0, 0, WIDTH, 150],
+                  fill=(0, 0, 0, 170)
+              )
+
+              odraw.rectangle(
+                  [0, HEIGHT - 150, WIDTH, HEIGHT],
+                  fill=(0, 0, 0, 170)
+              )
+
+              # Hook text
+              hook_words = fact["hook"].split()
+
+              lines = []
+              current = ""
+
+              for word in hook_words:
+                  test = (current + " " + word).strip()
+
+                  if draw.textbbox((0, 0), test, font=big_font)[2] < 900:
+                      current = test
+                  else:
+                      lines.append(current)
+                      current = word
+
+              if current:
+                  lines.append(current)
+
+              text_y = 250
+
+              for line in lines[:4]:
+                  bbox = draw.textbbox((0, 0), line, font=big_font)
+                  text_width = bbox[2] - bbox[0]
+                  x = (WIDTH - text_width) // 2
+
+                  draw.text(
+                      (x + 4, text_y + 4),
+                      line,
+                      font=big_font,
+                      fill=(0, 0, 0)
+                  )
+
+                  draw.text(
+                      (x, text_y),
+                      line,
+                      font=big_font,
+                      fill=(255, 255, 255)
+                  )
+
+                  text_y += 85
+
+              img = Image.alpha_composite(
+                  img.convert("RGBA"),
+                  overlay
+              ).convert("RGB")
+
+              img.save(
+                  f"{frames_dir}/frame_{frame:05d}.jpg",
+                  quality=88
+              )
+
+          # ---------------------------------------------------------
+          # CINEMATIC MUSIC
+          # ---------------------------------------------------------
+
+          sample_rate = 44100
+          duration = DURATION
+
+          t = np.linspace(
+              0,
+              duration,
+              int(sample_rate * duration),
+              endpoint=False
           )
+
+          music = (
+              0.07 * np.sin(2 * np.pi * 110 * t) +
+              0.04 * np.sin(2 * np.pi * 220 * t) +
+              0.025 * np.sin(2 * np.pi * 330 * t)
+          )
+
+          # Gentle pulse
+          pulse = 0.5 + 0.5 * np.sin(2 * np.pi * 1.2 * t)
+          music *= (0.7 + 0.3 * pulse)
+
+          music = np.clip(music, -1, 1)
+
+          audio = np.int16(music * 32767)
+
+          with wave.open("output/music.wav", "w") as wf:
+              wf.setnchannels(1)
+              wf.setsampwidth(2)
+              wf.setframerate(sample_rate)
+              wf.writeframes(audio.tobytes())
+
+          # ---------------------------------------------------------
+          # BUILD VIDEO
+          # ---------------------------------------------------------
+
+          subprocess.run([
+              "ffmpeg",
+              "-y",
+              "-framerate", str(FPS),
+              "-i", "frames/frame_%05d.jpg",
+              "-i", "output/voice.wav",
+              "-i", "output/music.wav",
+              "-filter_complex",
+              "[2:a]volume=0.25[music];"
+              "[1:a]volume=1.0[voice];"
+              "[voice][music]amix=inputs=2:duration=first[audio]",
+              "-map", "0:v",
+              "-map", "[audio]",
+              "-vf",
+              "subtitles=output/captions.srt:"
+              "force_style='FontName=DejaVu Sans,"
+              "FontSize=18,"
+              "PrimaryColour=&H00FFFFFF,"
+              "OutlineColour=&H00000000,"
+              "BorderStyle=1,"
+              "Outline=3,"
+              "Shadow=1,"
+              "Alignment=2,"
+              "MarginV=220'",
+              "-c:v", "libx264",
+              "-preset", "veryfast",
+              "-crf", "25",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac",
+              "-b:a", "128k",
+              "-movflags", "+faststart",
+              "-t", str(DURATION),
+              "output/block-fuel-short.mp4"
+          ], check=True)
+
+          print("========================================")
+          print("🔥 BLOCK FUEL VIDEO CREATED")
+          print("========================================")
+          print("Title:", title)
+          print("File: output/block-fuel-short.mp4")
+          print("========================================")
           PY
-      # ---------------------------------------------------------
-      # UPLOAD TO YOUTUBE IF AUTHORIZATION EXISTS
-      # ---------------------------------------------------------
-      - name: Upload to YouTube
-        env:
-          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-        run: |
-          python upload_youtube.py
-      # ---------------------------------------------------------
-      # SAVE EVERYTHING AS AN ARTIFACT
-      # ---------------------------------------------------------
-      - name: Save finished Short
+
+          python create_video.py
+
+      - name: Upload finished video
         uses: actions/upload-artifact@v4
         with:
-          name: block-fuel-short
-          path: |
-            block-fuel-short.mp4
-            script.txt
-            fact.json
-            captions.srt
-            youtube_title.txt
-            youtube_description.txt
+          name: Block-Fuel-Short
+          path: output/
+          retention-days: 7
