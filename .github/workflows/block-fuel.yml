@@ -2,23 +2,25 @@ name: Block Fuel
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */1 * * *"
+
+permissions:
+  contents: read
 
 jobs:
-  create-video:
+  generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Install FFmpeg and voice tools
+      - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu
@@ -28,429 +30,2266 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow numpy
 
-      - name: Generate Block Fuel Short
+      - name: Create Block Fuel generator
         shell: bash
         run: |
-          cat > create_video.py <<'PY'
+          mkdir -p generator output
+
+          cat > generator/main.py <<'PY'
           import os
-          import random
           import math
-          import wave
+          import random
           import subprocess
-          from PIL import Image, ImageDraw, ImageFont
+          import wave
+          import json
+          import time
+          import shutil
+          from pathlib import Path
+
           import numpy as np
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-          WIDTH = 1080
-          HEIGHT = 1920
+          # ============================================================
+          # BLOCK FUEL
+          # CINEMATIC MINECRAFT FACT SHORT GENERATOR
+          # ============================================================
+
+          WIDTH = 720
+          HEIGHT = 1280
           FPS = 30
-          DURATION = 20
+          DURATION = 18
+          TOTAL_FRAMES = FPS * DURATION
 
-          os.makedirs("output", exist_ok=True)
+          OUTPUT = Path("output")
+          OUTPUT.mkdir(exist_ok=True)
 
-          # ---------------------------------------------------------
-          # REAL MINECRAFT FACTS
-          # ---------------------------------------------------------
-
-          facts = [
-              {
-                  "hook": "Did you know Minecraft has a mob that can pick up blocks?",
-                  "body": "Endermen can pick up certain blocks and place them somewhere else.",
-                  "ending": "That's one reason you can sometimes find blocks where they shouldn't be."
-              },
-              {
-                  "hook": "Here's a strange Minecraft fact.",
-                  "body": "Creepers were created because the developer accidentally made a pig with the wrong dimensions.",
-                  "ending": "That mistake eventually became one of Minecraft's most famous mobs."
-              },
-              {
-                  "hook": "Minecraft's Nether has a weird connection to distance.",
-                  "body": "One block travelled in the Nether corresponds to eight blocks travelled in the Overworld.",
-                  "ending": "That's why Nether portals can be used for fast travel."
-              },
-              {
-                  "hook": "Did you know Minecraft's first version wasn't called Minecraft?",
-                  "body": "The game was originally called Cave Game during its early development.",
-                  "ending": "The name Minecraft came later."
-              },
-              {
-                  "hook": "Here's a useful Minecraft fact.",
-                  "body": "Water can flow up to eight blocks horizontally from its source in the Overworld.",
-                  "ending": "That's why water streams can travel surprisingly far."
-              },
-              {
-                  "hook": "Ever wondered why Creepers are green?",
-                  "body": "The Creeper's appearance became iconic because of its unusual tall, green design.",
-                  "ending": "And today, it's one of the most recognisable Minecraft mobs."
-              },
-              {
-                  "hook": "Minecraft has a mob that can teleport.",
-                  "body": "Endermen can teleport when they move around, making them difficult to trap.",
-                  "ending": "Just don't look directly into their eyes."
-              },
-              {
-                  "hook": "Here's something you might not know about Minecraft.",
-                  "body": "A Minecraft day and night cycle lasts about twenty minutes in real time.",
-                  "ending": "So one Minecraft day is much faster than a real day."
-              }
-          ]
-
-          fact = random.choice(facts)
-
-          script = (
-              fact["hook"] + " "
-              + fact["body"] + " "
-              + fact["ending"] + " "
-              + "Follow for more Minecraft facts."
+          SEED = (
+              int(time.time() * 1000000)
+              ^ random.randrange(1, 2147483647)
           )
 
-          with open("output/script.txt", "w", encoding="utf-8") as f:
-              f.write(script)
+          rng = random.Random(SEED)
 
-          # ---------------------------------------------------------
-          # TITLE + DESCRIPTION
-          # ---------------------------------------------------------
+          # ============================================================
+          # FACT DATABASE
+          # ============================================================
 
-          title = fact["hook"].replace("Did you know ", "").strip()
+          FACTS = [
+              ("Creeper",
+               "Creepers were created after a failed attempt to make the Minecraft pig.",
+               "overworld"),
 
-          description = (
-              "Minecraft fact: " + fact["body"] + "\n\n"
-              "#Minecraft #MinecraftFacts #Gaming #Shorts"
-          )
+              ("Chunks",
+               "Minecraft worlds are divided into chunks that are 16 blocks wide and 16 blocks long.",
+               "overworld"),
 
-          with open("output/title.txt", "w", encoding="utf-8") as f:
-              f.write(title[:95])
+              ("Minecraft Time",
+               "A complete Minecraft day and night cycle takes about twenty minutes in real time.",
+               "overworld"),
 
-          with open("output/description.txt", "w", encoding="utf-8") as f:
-              f.write(description)
+              ("Nether Travel",
+               "One block travelled horizontally in the Nether represents eight blocks in the Overworld.",
+               "nether"),
 
-          # ---------------------------------------------------------
-          # VOICE
-          # ---------------------------------------------------------
+              ("Ender Dragon",
+               "The Ender Dragon is the main boss of the End dimension.",
+               "end"),
 
-          subprocess.run([
-              "espeak-ng",
-              "-v", "en-us+m3",
-              "-s", "155",
-              "-p", "45",
-              "-a", "170",
-              "-w", "output/voice.wav",
-              script
-          ], check=True)
+              ("Redstone",
+               "Redstone can be used to build everything from simple doors to extremely complex machines.",
+               "redstone"),
 
-          # ---------------------------------------------------------
-          # CAPTIONS
-          # ---------------------------------------------------------
+              ("Spiders",
+               "Spiders can climb walls, making ordinary walls a poor defence against them.",
+               "cave"),
 
-          words = script.split()
+              ("Slimes",
+               "Large slimes can split into smaller slimes when defeated.",
+               "swamp"),
 
-          # Rough timing based on number of words.
-          total_words = len(words)
-          seconds_per_word = DURATION / max(total_words, 1)
+              ("Villagers",
+               "Villagers can take professions by claiming suitable job-site blocks.",
+               "village"),
 
-          def timestamp(seconds):
-              hours = int(seconds // 3600)
-              minutes = int((seconds % 3600) // 60)
-              secs = int(seconds % 60)
-              millis = int((seconds - int(seconds)) * 1000)
-              return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+              ("Iron Golem",
+               "Iron Golems can defend villages from hostile mobs.",
+               "village"),
 
-          with open("output/captions.srt", "w", encoding="utf-8") as f:
-              caption_number = 1
+              ("Snow Golem",
+               "Players can create Snow Golems using snow blocks and a carved pumpkin.",
+               "snow"),
 
-              for i in range(0, len(words), 6):
-                  chunk = words[i:i+6]
+              ("Blazes",
+               "Blazes naturally spawn in Nether fortresses.",
+               "nether"),
 
-                  start = i * seconds_per_word
-                  end = min((i + len(chunk)) * seconds_per_word, DURATION)
+              ("Ghasts",
+               "Ghasts can fly through the Nether and fire explosive projectiles.",
+               "nether"),
 
-                  f.write(f"{caption_number}\n")
-                  f.write(f"{timestamp(start)} --> {timestamp(end)}\n")
-                  f.write(" ".join(chunk) + "\n\n")
+              ("Piglins",
+               "Piglins can barter with players who give them gold ingots.",
+               "nether"),
 
-                  caption_number += 1
+              ("End Cities",
+               "Some End Cities contain End Ships where players can find elytra.",
+               "end"),
 
-          # ---------------------------------------------------------
-          # CINEMATIC MINECRAFT-STYLE VISUAL
-          # ---------------------------------------------------------
+              ("Elytra",
+               "Elytra allow players to glide through the air.",
+               "end"),
 
-          frames_dir = "frames"
-          os.makedirs(frames_dir, exist_ok=True)
+              ("Fireworks",
+               "Firework rockets can boost players while they are gliding with an elytra.",
+               "sky"),
 
-          font_paths = [
-              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+              ("Beds",
+               "Trying to sleep in the Nether or End causes a bed to explode.",
+               "nether"),
+
+              ("Respawn Anchor",
+               "Respawn anchors can be used to set a respawn point in the Nether.",
+               "nether"),
+
+              ("Beacon",
+               "Beacons can provide powerful effects to nearby players.",
+               "overworld"),
+
+              ("Netherite",
+               "Netherite equipment is more durable than diamond equipment.",
+               "nether"),
+
+              ("Ancient Debris",
+               "Ancient Debris can be smelted into Netherite Scrap.",
+               "nether"),
+
+              ("Enchanting",
+               "Bookshelves around an enchanting table can increase the available enchantment levels.",
+               "library"),
+
+              ("Observers",
+               "Observers detect certain block updates and produce redstone signals.",
+               "redstone"),
+
+              ("Pistons",
+               "Pistons can push blocks when powered by redstone.",
+               "redstone"),
+
+              ("Sticky Pistons",
+               "Sticky pistons can pull certain blocks back when they retract.",
+               "redstone"),
+
+              ("Hoppers",
+               "Hoppers can move items between inventories.",
+               "redstone"),
+
+              ("TNT",
+               "TNT can be activated and creates an explosion that affects nearby blocks.",
+               "desert"),
+
+              ("Minecarts",
+               "Minecarts can travel along rails and be used in automated systems.",
+               "railway"),
+
+              ("Powered Rails",
+               "Powered rails can accelerate minecarts when powered.",
+               "railway"),
+
+              ("Cats",
+               "Cats can scare creepers away.",
+               "village"),
+
+              ("Wolves",
+               "Wolves can be tamed and follow their owner.",
+               "forest"),
+
+              ("Axolotls",
+               "Axolotls can help players fight certain underwater hostile mobs.",
+               "ocean"),
+
+              ("Dolphins",
+               "Dolphins can give nearby players a swimming speed boost.",
+               "ocean"),
+
+              ("Turtles",
+               "Turtles lay eggs on beaches.",
+               "beach"),
+
+              ("Bees",
+               "Bees can pollinate flowers and return to their nests or hives.",
+               "forest"),
+
+              ("Honey Blocks",
+               "Honey blocks can move connected blocks when pushed by pistons.",
+               "redstone"),
+
+              ("Anvils",
+               "Anvils can be used to repair and combine items.",
+               "blacksmith"),
+
+              ("Maps",
+               "Maps can show explored areas of the Minecraft world.",
+               "overworld"),
+
+              ("Compass",
+               "A normal compass points toward the world spawn.",
+               "overworld"),
+
+              ("Lodestone",
+               "A lodestone can make a compass point toward a chosen location.",
+               "nether"),
+
+              ("Torches",
+               "Torches provide light and can help prevent hostile mob spawning nearby.",
+               "cave"),
+
+              ("Soul Torches",
+               "Soul torches emit a blue flame.",
+               "nether"),
+
+              ("Campfires",
+               "Campfires can cook food without needing to be continually refuelled.",
+               "forest"),
+
+              ("Powder Snow",
+               "Powder snow has special freezing mechanics that affect entities inside it.",
+               "snow"),
+
+              ("Scaffolding",
+               "Scaffolding can be climbed and is useful for temporary construction.",
+               "village"),
+
+              ("Bamboo",
+               "Bamboo can grow quickly and is used in several crafting recipes.",
+               "jungle"),
+
+              ("Sugar Cane",
+               "Sugar cane grows beside water and can be used to make paper.",
+               "river"),
+
+              ("Fishing",
+               "Fishing can produce fish as well as treasure and junk items.",
+               "ocean"),
+
+              ("Trading",
+               "Trading with villagers can unlock higher trade tiers.",
+               "village"),
+
+              ("Zombie Villagers",
+               "Zombie villagers can be cured and returned to normal villagers.",
+               "village"),
+
+              ("Potions",
+               "Splash potions can affect multiple entities within their impact area.",
+               "library"),
+
+              ("Brewing",
+               "Brewing stands are used to create potions.",
+               "nether"),
+
+              ("Phantoms",
+               "Phantoms can appear when players have not slept for several in-game days.",
+               "sky"),
+
+              ("Guardians",
+               "Guardians are hostile underwater mobs found around ocean monuments.",
+               "ocean"),
+
+              ("Drowned",
+               "Drowned are underwater variants of zombies.",
+               "ocean"),
+
+              ("Tridents",
+               "Tridents can be thrown or used as melee weapons.",
+               "ocean"),
+
+              ("Riptide",
+               "Riptide can propel a player through water or rain.",
+               "ocean"),
+
+              ("Loyalty",
+               "The Loyalty enchantment can make a thrown trident return to its owner.",
+               "ocean"),
+
+              ("Crossbows",
+               "Crossbows can use fireworks as ammunition.",
+               "village"),
+
+              ("Arrows",
+               "Arrows can be tipped with potion effects.",
+               "forest"),
+
+              ("Totem",
+               "A Totem of Undying can save a player from certain fatal situations when held correctly.",
+               "woodland"),
+
+              ("Evokers",
+               "Evokers can summon vexes during combat.",
+               "woodland"),
+
+              ("Vexes",
+               "Vexes are small flying hostile mobs summoned by Evokers.",
+               "woodland"),
+
+              ("Pillagers",
+               "Pillagers use crossbows as their main weapon.",
+               "village"),
+
+              ("Raids",
+               "Raids can begin when a player carrying Bad Omen enters a village.",
+               "village"),
+
+              ("Ravagers",
+               "Ravagers are large hostile mobs that can appear during raids.",
+               "village"),
+
+              ("Witches",
+               "Witches use potions during combat.",
+               "swamp"),
+
+              ("Mushroom Fields",
+               "Mushroom fields are one of the rarest Overworld biomes.",
+               "mushroom"),
+
+              ("Mooshrooms",
+               "Mooshrooms naturally spawn in mushroom fields.",
+               "mushroom"),
+
+              ("Desert Temples",
+               "Desert temples contain hidden treasure rooms.",
+               "desert"),
+
+              ("Jungle Temples",
+               "Jungle temples contain traps and redstone mechanisms.",
+               "jungle"),
+
+              ("Strongholds",
+               "Strongholds contain End portals that can lead to the End.",
+               "stronghold"),
+
+              ("Eyes of Ender",
+               "Eyes of Ender are made using ender pearls and blaze powder.",
+               "stronghold"),
+
+              ("Ender Pearls",
+               "Throwing an ender pearl can teleport the player.",
+               "end"),
+
+              ("End Crystals",
+               "End crystals can heal the Ender Dragon.",
+               "end"),
+
+              ("Dragon Egg",
+               "The dragon egg is mainly a trophy item.",
+               "end"),
+
+              ("Wither",
+               "The Wither drops a Nether Star when defeated.",
+               "nether"),
+
+              ("Nether Star",
+               "Nether Stars are used to craft beacons.",
+               "nether"),
+
+              ("Charged Creeper",
+               "A creeper becomes charged when it is struck by lightning.",
+               "storm"),
+
+              ("Fall Damage",
+               "Water can prevent many entities from taking normal fall damage.",
+               "cliff"),
+
+              ("Hay Bales",
+               "Hay bales reduce fall damage when an entity lands on them.",
+               "village"),
+
+              ("Honey",
+               "Honey blocks can slow entities moving across their surfaces.",
+               "forest"),
+
+              ("Bubble Columns",
+               "Bubble columns can be used to build water elevators.",
+               "ocean"),
+
+              ("Soul Sand",
+               "Soul sand creates upward bubble columns underwater.",
+               "nether"),
+
+              ("Magma Blocks",
+               "Magma blocks create downward bubble columns underwater.",
+               "ocean"),
+
+              ("Frost Walker",
+               "Frost Walker can temporarily turn nearby water into frosted ice.",
+               "snow"),
+
+              ("Depth Strider",
+               "Depth Strider increases movement speed underwater.",
+               "ocean"),
+
+              ("Respiration",
+               "Respiration allows players to stay underwater for longer.",
+               "ocean"),
+
+              ("Aqua Affinity",
+               "Aqua Affinity improves mining speed underwater.",
+               "ocean"),
+
+              ("Feather Falling",
+               "Feather Falling reduces fall damage.",
+               "cliff"),
+
+              ("Mending",
+               "Mending uses experience to repair equipped or held items.",
+               "library"),
+
+              ("Unbreaking",
+               "Unbreaking makes many items use durability more efficiently.",
+               "library"),
+
+              ("Fortune",
+               "Fortune can increase the number of certain drops obtained from blocks.",
+               "cave"),
+
+              ("Silk Touch",
+               "Silk Touch allows certain blocks to be collected in their original form.",
+               "cave"),
+
+              ("Efficiency",
+               "Efficiency makes many tools break blocks faster.",
+               "cave"),
+
+              ("Sharpness",
+               "Sharpness increases melee damage from applicable weapons.",
+               "forest"),
+
+              ("Looting",
+               "Looting can increase certain mob drops.",
+               "forest"),
+
+              ("Fire Aspect",
+               "Fire Aspect can set targets on fire when using an enchanted melee weapon.",
+               "nether"),
+
+              ("Knockback",
+               "Knockback can increase the distance enemies are pushed by attacks.",
+               "forest"),
+
+              ("Thorns",
+               "Thorns can damage attackers when they hit an entity wearing the enchantment.",
+               "forest"),
+
+              ("Soul Speed",
+               "Soul Speed increases movement speed on soul sand and soul soil.",
+               "nether"),
+
+              ("Swift Sneak",
+               "Swift Sneak increases movement speed while sneaking.",
+               "ancient"),
+
+              ("Armor Trims",
+               "Armor trims change the appearance of armour without changing its base protection.",
+               "smithing"),
+
+              ("Archaeology",
+               "Archaeology lets players brush suspicious blocks to uncover hidden items.",
+               "desert"),
+
+              ("Sniffers",
+               "Sniffers can find ancient plant seeds by digging in the ground.",
+               "jungle"),
+
+              ("Camels",
+               "Camels can carry two players at once.",
+               "desert"),
+
+              ("Armadillos",
+               "Armadillos can roll up when threatened.",
+               "savanna"),
+
+              ("Wolf Armour",
+               "Wolf armour can protect a tamed wolf from damage.",
+               "savanna"),
           ]
 
-          font_path = font_paths[0]
+          # ============================================================
+          # HOOKS
+          # ============================================================
 
-          big_font = ImageFont.truetype(font_path, 70)
-          small_font = ImageFont.truetype(font_path, 42)
+          HOOKS = [
+              "Minecraft has a detail most players completely miss.",
+              "This Minecraft fact sounds fake, but it isn't.",
+              "You probably never noticed this in Minecraft.",
+              "Minecraft quietly does something pretty crazy here.",
+              "Most players don't know this Minecraft mechanic.",
+              "This is one of Minecraft's strangest little details.",
+              "Here's something Minecraft never really explains.",
+              "You won't look at Minecraft the same way after this.",
+              "This Minecraft fact is seriously underrated.",
+              "There's more going on here than you might think."
+          ]
 
-          total_frames = DURATION * FPS
+          ENDINGS = [
+              "Follow for more Minecraft facts.",
+              "Follow for more facts you probably missed.",
+              "Follow for the next Minecraft fact.",
+              "More Minecraft facts coming soon.",
+              "Follow for more."
+          ]
 
-          for frame in range(total_frames):
-              t = frame / FPS
+          # ============================================================
+          # FONTS
+          # ============================================================
 
-              img = Image.new("RGB", (WIDTH, HEIGHT), (20, 30, 40))
-              draw = ImageDraw.Draw(img)
+          def font(size, bold=False):
+              paths = []
 
-              # Sky gradient
+              if bold:
+                  paths = [
+                      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+                  ]
+              else:
+                  paths = [
+                      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+                  ]
+
+              for p in paths:
+                  if os.path.exists(p):
+                      return ImageFont.truetype(p, size)
+
+              return ImageFont.load_default()
+
+          FONT_TITLE = font(52, True)
+          FONT_FACT = font(38, True)
+          FONT_SMALL = font(25, False)
+
+          # ============================================================
+          # COLOURS
+          # ============================================================
+
+          BIOMES = {
+              "overworld": ((70, 155, 235), (210, 235, 255), (65, 135, 60)),
+              "nether": ((70, 8, 8), (190, 35, 12), (80, 25, 20)),
+              "end": ((10, 5, 28), (65, 20, 75), (65, 65, 72)),
+              "ocean": ((5, 70, 140), (20, 165, 190), (15, 75, 80)),
+              "cave": ((7, 8, 14), (38, 40, 52), (55, 55, 60)),
+              "swamp": ((35, 80, 55), (105, 145, 100), (45, 85, 45)),
+              "village": ((90, 170, 235), (220, 240, 255), (90, 120, 55)),
+              "snow": ((80, 135, 205), (225, 240, 255), (210, 220, 225)),
+              "sky": ((35, 105, 205), (170, 220, 255), (75, 145, 70)),
+              "forest": ((55, 125, 210), (180, 220, 240), (45, 110, 50)),
+              "beach": ((35, 130, 205), (180, 230, 245), (205, 180, 105)),
+              "library": ((25, 45, 80), (100, 75, 105), (90, 60, 35)),
+              "blacksmith": ((25, 30, 35), (100, 80, 75), (75, 50, 35)),
+              "railway": ((35, 40, 50), (90, 95, 105), (75, 55, 40)),
+              "jungle": ((30, 125, 80), (110, 195, 130), (55, 110, 50)),
+              "river": ((30, 125, 200), (140, 215, 235), (70, 145, 75)),
+              "woodland": ((35, 100, 75), (125, 175, 125), (65, 100, 55)),
+              "mushroom": ((95, 55, 120), (180, 105, 145), (95, 70, 70)),
+              "desert": ((220, 155, 65), (255, 220, 135), (190, 145, 65)),
+              "stronghold": ((25, 25, 35), (65, 60, 75), (75, 75, 80)),
+              "cliff": ((65, 145, 220), (210, 235, 255), (90, 85, 75)),
+              "storm": ((25, 30, 55), (80, 90, 125), (65, 65, 70)),
+              "ancient": ((20, 35, 35), (70, 90, 80), (60, 65, 55)),
+              "smithing": ((35, 45, 55), (90, 100, 110), (75, 60, 45)),
+              "savanna": ((95, 165, 210), (230, 220, 160), (135, 120, 55)),
+          }
+
+          # ============================================================
+          # BASIC HELPERS
+          # ============================================================
+
+          def clamp(v):
+              return max(0, min(255, int(v)))
+
+          def mix(a, b, t):
+              return tuple(
+                  clamp(a[i] * (1 - t) + b[i] * t)
+                  for i in range(3)
+              )
+
+          def gradient(img, top, bottom):
+              d = ImageDraw.Draw(img)
+
               for y in range(HEIGHT):
-                  ratio = y / HEIGHT
-
-                  r = int(25 + 30 * ratio)
-                  g = int(55 + 25 * ratio)
-                  b = int(90 + 10 * ratio)
-
-                  draw.line(
-                      [(0, y), (WIDTH, y)],
-                      fill=(r, g, b)
+                  t = y / HEIGHT
+                  d.line(
+                      (0, y, WIDTH, y),
+                      fill=mix(top, bottom, t)
                   )
 
-              # Sun
-              sun_x = int(WIDTH * 0.75)
-              sun_y = int(HEIGHT * 0.22)
+          def block(d, x, y, s, colour, h=1):
+              depth = s * 0.35
 
-              draw.ellipse(
-                  [
-                      sun_x - 100,
-                      sun_y - 100,
-                      sun_x + 100,
-                      sun_y + 100
-                  ],
-                  fill=(255, 220, 120)
-              )
-
-              # Ground
-              ground_y = int(HEIGHT * 0.68)
-
-              draw.rectangle(
-                  [0, ground_y, WIDTH, HEIGHT],
-                  fill=(55, 105, 55)
-              )
-
-              # Minecraft-like grass blocks
-              block_size = 120
-
-              for x in range(-block_size, WIDTH + block_size, block_size):
-                  for y in range(ground_y, HEIGHT, block_size):
-                      offset = int(math.sin(t * 0.8 + x * 0.01) * 4)
-
-                      draw.rectangle(
-                          [
-                              x,
-                              y + offset,
-                              x + block_size - 4,
-                              y + block_size - 4 + offset
-                          ],
-                          fill=(75, 125, 65)
-                      )
-
-                      draw.rectangle(
-                          [
-                              x,
-                              y + offset,
-                              x + block_size - 4,
-                              y + 15 + offset
-                          ],
-                          fill=(100, 160, 75)
-                      )
-
-              # Large cinematic blocky mountain
-              mountain_points = [
-                  (0, ground_y),
-                  (170, 900),
-                  (330, 1080),
-                  (500, 760),
-                  (670, 1030),
-                  (830, 820),
-                  (1080, 980),
-                  (1080, ground_y)
+              top = [
+                  (x, y),
+                  (x+s, y),
+                  (x+s+depth, y-depth),
+                  (x+depth, y-depth)
               ]
 
-              draw.polygon(
-                  mountain_points,
-                  fill=(45, 60, 70)
-              )
+              left = [
+                  (x, y),
+                  (x+depth, y-depth),
+                  (x+depth, y+s*h),
+                  (x, y+s*h+depth)
+              ]
 
-              # Trees
-              for tree_x in [130, 870]:
-                  trunk_top = ground_y - 300
+              right = [
+                  (x+s, y),
+                  (x+s+depth, y-depth),
+                  (x+s+depth, y+s*h+depth),
+                  (x+s, y+s*h)
+              ]
 
-                  draw.rectangle(
-                      [
-                          tree_x - 25,
-                          trunk_top,
-                          tree_x + 25,
-                          ground_y
-                      ],
-                      fill=(90, 55, 30)
+              top_c = tuple(clamp(c*1.15) for c in colour)
+              left_c = tuple(clamp(c*0.72) for c in colour)
+              right_c = tuple(clamp(c*0.9) for c in colour)
+
+              d.polygon(top, fill=top_c)
+              d.polygon(left, fill=left_c)
+              d.polygon(right, fill=right_c)
+
+          def glow_circle(img, x, y, radius, colour):
+              layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+              d = ImageDraw.Draw(layer)
+
+              for i in range(8, 0, -1):
+                  r = radius + i * 14
+                  alpha = int(10 + (8-i)*5)
+
+                  d.ellipse(
+                      (x-r, y-r, x+r, y+r),
+                      fill=(
+                          colour[0],
+                          colour[1],
+                          colour[2],
+                          alpha
+                      )
                   )
 
-                  draw.rectangle(
-                      [
-                          tree_x - 110,
-                          trunk_top - 100,
-                          tree_x + 110,
-                          trunk_top + 100
-                      ],
-                      fill=(30, 90, 45)
+              img.alpha_composite(layer)
+
+              d2 = ImageDraw.Draw(img)
+
+              d2.ellipse(
+                  (
+                      x-radius,
+                      y-radius,
+                      x+radius,
+                      y+radius
+                  ),
+                  fill=colour + (255,)
+              )
+
+          def starfield(d, amount=60):
+              for i in range(amount):
+                  x = rng.randrange(WIDTH)
+                  y = rng.randrange(100, 800)
+                  s = rng.choice([1, 1, 2, 2, 3])
+
+                  d.rectangle(
+                      (x, y, x+s, y+s),
+                      fill=(230, 230, 255)
                   )
 
-              # Moving cinematic camera effect
-              camera_x = int(math.sin(t * 0.6) * 25)
+          # ============================================================
+          # SUBJECTS
+          # ============================================================
 
-              overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-              odraw = ImageDraw.Draw(overlay)
+          def creeper(d, x, y, scale=1):
+              w = 90 * scale
+              h = 145 * scale
 
-              # Dark cinematic bars
-              odraw.rectangle(
-                  [0, 0, WIDTH, 150],
-                  fill=(0, 0, 0, 170)
+              green = (72, 155, 70)
+
+              d.rectangle(
+                  (x-w/2, y-h, x+w/2, y),
+                  fill=green
               )
 
-              odraw.rectangle(
-                  [0, HEIGHT - 150, WIDTH, HEIGHT],
-                  fill=(0, 0, 0, 170)
+              head = 100 * scale
+
+              d.rectangle(
+                  (
+                      x-head/2,
+                      y-h-65*scale,
+                      x+head/2,
+                      y-h+35*scale
+                  ),
+                  fill=(68, 145, 66)
               )
 
-              # Hook text
-              hook_words = fact["hook"].split()
+              eye = 11 * scale
 
+              d.rectangle(
+                  (
+                      x-head*0.27,
+                      y-h-40*scale,
+                      x-head*0.27+eye,
+                      y-h-40*scale+eye
+                  ),
+                  fill=(10, 10, 10)
+              )
+
+              d.rectangle(
+                  (
+                      x+head*0.16,
+                      y-h-40*scale,
+                      x+head*0.16+eye,
+                      y-h-40*scale+eye
+                  ),
+                  fill=(10, 10, 10)
+              )
+
+              d.polygon(
+                  [
+                      (x-22*scale, y-h+4*scale),
+                      (x, y-h+20*scale),
+                      (x+22*scale, y-h+4*scale),
+                      (x+22*scale, y-h+22*scale),
+                      (x, y-h+9*scale),
+                      (x-22*scale, y-h+22*scale)
+                  ],
+                  fill=(10, 10, 10)
+              )
+
+              leg = 27 * scale
+
+              d.rectangle(
+                  (x-w*0.42, y-65*scale, x-w*0.42+leg, y),
+                  fill=(60, 130, 58)
+              )
+
+              d.rectangle(
+                  (x+w*0.42-leg, y-65*scale, x+w*0.42, y),
+                  fill=(60, 130, 58)
+              )
+
+          def dragon(d, x, y, scale=1, flap=0):
+              body = [
+                  (x-105*scale, y),
+                  (x-40*scale, y-38*scale),
+                  (x+55*scale, y-20*scale),
+                  (x+115*scale, y),
+                  (x+45*scale, y+38*scale),
+                  (x-65*scale, y+32*scale)
+              ]
+
+              d.polygon(body, fill=(30, 20, 40))
+
+              d.polygon(
+                  [
+                      (x-35*scale, y),
+                      (x-220*scale, y-150*scale-flap),
+                      (x-100*scale, y+20*scale),
+                      (x-55*scale, y+25*scale)
+                  ],
+                  fill=(65, 35, 85)
+              )
+
+              d.polygon(
+                  [
+                      (x+35*scale, y),
+                      (x+220*scale, y-150*scale+flap),
+                      (x+100*scale, y+20*scale),
+                      (x+55*scale, y+25*scale)
+                  ],
+                  fill=(65, 35, 85)
+              )
+
+              glow_circle(
+                  d._image.convert("RGBA")
+                  if hasattr(d, "_image")
+                  else Image.new("RGBA", (WIDTH, HEIGHT)),
+                  int(x),
+                  int(y),
+                  1,
+                  (255, 255, 255)
+              )
+
+          def fireball(d, x, y, r=25):
+              d.ellipse(
+                  (x-r*2, y-r*2, x+r*2, y+r*2),
+                  fill=(180, 35, 10)
+              )
+
+              d.ellipse(
+                  (x-r*1.4, y-r*1.4, x+r*1.4, y+r*1.4),
+                  fill=(255, 95, 15)
+              )
+
+              d.ellipse(
+                  (x-r*0.7, y-r*0.7, x+r*0.7, y+r*0.7),
+                  fill=(255, 235, 120)
+              )
+
+          def lightning(d, x, y):
+              points = [
+                  (x, y),
+                  (x-25, y+90),
+                  (x+15, y+90),
+                  (x-35, y+200),
+                  (x+40, y+100),
+                  (x+5, y+100),
+                  (x, y)
+              ]
+
+              d.line(
+                  points,
+                  fill=(210, 235, 255),
+                  width=12,
+                  joint="curve"
+              )
+
+          def tree(d, x, y, scale=1):
+              trunk = 45 * scale
+
+              d.rectangle(
+                  (
+                      x-trunk/2,
+                      y-170*scale,
+                      x+trunk/2,
+                      y
+                  ),
+                  fill=(100, 65, 35)
+              )
+
+              for ox, oy, r in [
+                  (-55, -175, 75),
+                  (10, -220, 90),
+                  (70, -170, 70),
+                  (0, -130, 80)
+              ]:
+                  d.ellipse(
+                      (
+                          x+ox*scale-r*scale,
+                          y+oy*scale-r*scale,
+                          x+ox*scale+r*scale,
+                          y+oy*scale+r*scale
+                      ),
+                      fill=(40, 125, 50)
+                  )
+
+          def village_house(d, x, y, scale=1):
+              w = 230 * scale
+              h = 180 * scale
+
+              d.rectangle(
+                  (x-w/2, y-h, x+w/2, y),
+                  fill=(125, 85, 50)
+              )
+
+              d.polygon(
+                  [
+                      (x-w*0.65, y-h),
+                      (x, y-h-120*scale),
+                      (x+w*0.65, y-h)
+                  ],
+                  fill=(85, 45, 35)
+              )
+
+              d.rectangle(
+                  (
+                      x-28*scale,
+                      y-85*scale,
+                      x+28*scale,
+                      y
+                  ),
+                  fill=(55, 35, 25)
+              )
+
+              d.rectangle(
+                  (
+                      x-w*0.32,
+                      y-h*0.65,
+                      x-w*0.05,
+                      y-h*0.38
+                  ),
+                  fill=(100, 190, 220)
+              )
+
+          def ocean_monument(d, x, y, scale=1):
+              for i in range(5):
+                  bx = x + (i-2)*65*scale
+
+                  d.rectangle(
+                      (
+                          bx-30*scale,
+                          y-200*scale,
+                          bx+30*scale,
+                          y
+                      ),
+                      fill=(45, 125, 125)
+                  )
+
+              d.rectangle(
+                  (
+                      x-170*scale,
+                      y-230*scale,
+                      x+170*scale,
+                      y-190*scale
+                  ),
+                  fill=(60, 150, 145)
+              )
+
+          # ============================================================
+          # ENVIRONMENT
+          # ============================================================
+
+          def environment(style, frame):
+              top, bottom, ground = BIOMES.get(
+                  style,
+                  BIOMES["overworld"]
+              )
+
+              img = Image.new("RGB", (WIDTH, HEIGHT))
+              gradient(img, top, bottom)
+
+              d = ImageDraw.Draw(img)
+
+              t = frame / TOTAL_FRAMES
+
+              if style == "nether":
+                  for i in range(20):
+                      x = (i*97 + frame*2) % WIDTH
+                      y = (i*61 + frame*4) % HEIGHT
+
+                      d.ellipse(
+                          (x-5, y-5, x+5, y+5),
+                          fill=(255, 65, 15)
+                      )
+
+                  for i in range(8):
+                      block(
+                          d,
+                          i*105-30,
+                          880,
+                          90,
+                          (80, 35, 30),
+                          2+(i%2)
+                      )
+
+              elif style == "end":
+                  starfield(d, 85)
+
+                  d.ellipse(
+                      (510, 120, 650, 260),
+                      fill=(220, 220, 210)
+                  )
+
+                  for i in range(7):
+                      x = 35+i*110
+                      h = 150+(i%3)*65
+
+                      block(
+                          d,
+                          x,
+                          900,
+                          75,
+                          (60, 60, 68),
+                          h/75
+                      )
+
+              elif style == "ocean":
+                  d.rectangle(
+                      (0, 820, WIDTH, HEIGHT),
+                      fill=(18, 85, 90)
+                  )
+
+                  for i in range(12):
+                      x = (i*75 + frame*2) % WIDTH
+
+                      d.line(
+                          (
+                              x,
+                              300+i*35,
+                              x+40,
+                              285+i*35
+                          ),
+                          fill=(110, 220, 230),
+                          width=4
+                      )
+
+                  for i in range(9):
+                      x = i*100
+
+                      d.rectangle(
+                          (
+                              x,
+                              850,
+                              x+35,
+                              HEIGHT
+                          ),
+                          fill=(40, 105, 75)
+                      )
+
+              elif style == "cave":
+                  d.rectangle(
+                      (0, 0, WIDTH, HEIGHT),
+                      fill=(10, 11, 17)
+                  )
+
+                  for i in range(25):
+                      x = rng.randrange(-100, WIDTH+100)
+                      y = rng.randrange(300, HEIGHT)
+
+                      d.polygon(
+                          [
+                              (x, y),
+                              (x+80, y+20),
+                              (x+45, y+170)
+                          ],
+                          fill=(40, 42, 48)
+                      )
+
+                  for i in range(15):
+                      x = rng.randrange(WIDTH)
+                      y = rng.randrange(500, 1050)
+
+                      d.ellipse(
+                          (x-5, y-5, x+5, y+5),
+                          fill=(255, 190, 55)
+                      )
+
+              elif style == "desert":
+                  d.rectangle(
+                      (0, 800, WIDTH, HEIGHT),
+                      fill=ground
+                  )
+
+                  for i in range(8):
+                      x = i*110-40
+
+                      block(
+                          d,
+                          x,
+                          810,
+                          100,
+                          (200, 150, 70),
+                          1+(i%2)
+                      )
+
+              else:
+                  d.rectangle(
+                      (0, 820, WIDTH, HEIGHT),
+                      fill=ground
+                  )
+
+                  for x in range(-80, WIDTH+100, 100):
+                      block(
+                          d,
+                          x,
+                          825,
+                          80,
+                          ground,
+                          1+(x//100 % 2)
+                      )
+
+              return img
+
+          # ============================================================
+          # SUBJECT RENDERING
+          # ============================================================
+
+          def render_subject(img, topic, style, frame, shot):
+              d = ImageDraw.Draw(img)
+
+              t = frame / TOTAL_FRAMES
+
+              # Camera path changes every shot.
+              shot_progress = (
+                  (frame % (FPS*3)) /
+                  float(FPS*3)
+              )
+
+              drift = math.sin(
+                  shot_progress * math.pi * 2
+              )
+
+              cx = WIDTH/2 + drift*130
+              cy = 760
+
+              if topic in ["Creeper", "Charged Creeper"]:
+                  cx = WIDTH/2 + math.sin(t*8)*120
+                  cy = 830 + math.sin(t*10)*25
+
+                  creeper(
+                      d,
+                      cx,
+                      cy,
+                      1.25
+                  )
+
+                  if topic == "Charged Creeper":
+                      for i in range(8):
+                          lightning(
+                              d,
+                              int(cx + math.sin(i*2)*100),
+                              int(cy-400+i*25)
+                          )
+
+              elif topic == "Ender Dragon":
+                  cx = WIDTH/2 + math.sin(t*5)*170
+                  cy = 520 + math.sin(t*8)*70
+
+                  # large dragon silhouette
+                  body = [
+                      (cx-110, cy),
+                      (cx-40, cy-45),
+                      (cx+80, cy-15),
+                      (cx+120, cy+25),
+                      (cx+45, cy+55),
+                      (cx-75, cy+40)
+                  ]
+
+                  d.polygon(
+                      body,
+                      fill=(30, 20, 40)
+                  )
+
+                  flap = math.sin(frame*0.18)*90
+
+                  d.polygon(
+                      [
+                          (cx-30, cy),
+                          (cx-230, cy-160-flap),
+                          (cx-100, cy+30),
+                          (cx-55, cy+30)
+                      ],
+                      fill=(70, 35, 90)
+                  )
+
+                  d.polygon(
+                      [
+                          (cx+30, cy),
+                          (cx+230, cy-160+flap),
+                          (cx+100, cy+30),
+                          (cx+55, cy+30)
+                      ],
+                      fill=(70, 35, 90)
+                  )
+
+                  glow = 8 + int(
+                      math.sin(frame*0.2)*4
+                  )
+
+                  d.ellipse(
+                      (
+                          cx+80-glow,
+                          cy-10-glow,
+                          cx+80+glow,
+                          cy-10+glow
+                      ),
+                      fill=(255, 40, 40)
+                  )
+
+              elif topic in [
+                  "Nether",
+                  "Blazes",
+                  "Wither",
+                  "Wither Skeletons",
+                  "Ghasts",
+                  "Netherite",
+                  "Ancient Debris"
+              ]:
+                  cx = WIDTH/2 + math.sin(t*7)*170
+                  cy = 620 + math.cos(t*5)*80
+
+                  fireball(
+                      d,
+                      cx,
+                      cy,
+                      35
+                  )
+
+                  for i in range(16):
+                      angle = i*0.7 + frame*0.06
+
+                      px = cx + math.cos(angle)*(
+                          100+i*5
+                      )
+
+                      py = cy + math.sin(angle)*(
+                          100+i*5
+                      )
+
+                      d.rectangle(
+                          (
+                              px-4,
+                              py-4,
+                              px+4,
+                              py+4
+                          ),
+                          fill=(255, 110, 25)
+                      )
+
+              elif topic in [
+                  "Redstone",
+                  "Observers",
+                  "Pistons",
+                  "Sticky Pistons",
+                  "Hoppers",
+                  "Honey Blocks"
+              ]:
+                  base = 900
+
+                  for i in range(7):
+                      x = 80+i*95
+
+                      block(
+                          d,
+                          x,
+                          base,
+                          65,
+                          (120, 115, 105),
+                          1
+                      )
+
+                  pulse = (
+                      math.sin(frame*0.25)+1
+                  )/2
+
+                  for i in range(6):
+                      x = 105+i*95
+
+                      d.ellipse(
+                          (
+                              x-10,
+                              850,
+                              x+10,
+                              870
+                          ),
+                          fill=(
+                              255,
+                              int(60+180*pulse),
+                              30
+                          )
+                      )
+
+                  piston_x = 100 + (
+                      math.sin(t*12)+1
+                  )*230
+
+                  d.rectangle(
+                      (
+                          piston_x,
+                          610,
+                          piston_x+180,
+                          680
+                      ),
+                      fill=(135, 135, 125)
+                  )
+
+                  d.rectangle(
+                      (
+                          piston_x+170,
+                          625,
+                          piston_x+270,
+                          665
+                      ),
+                      fill=(190, 165, 95)
+                  )
+
+              elif topic in [
+                  "Ocean Monuments",
+                  "Guardians",
+                  "Drowned",
+                  "Tridents",
+                  "Riptide",
+                  "Loyalty",
+                  "Axolotls",
+                  "Dolphins"
+              ]:
+                  ocean_monument(
+                      d,
+                      WIDTH/2,
+                      900,
+                      1.0
+                  )
+
+                  for i in range(20):
+                      px = (
+                          i*47 +
+                          frame*(
+                              1+(i%3)
+                          )
+                      ) % WIDTH
+
+                      py = 400 + (
+                          i*37 %
+                          520
+                      )
+
+                      d.ellipse(
+                          (
+                              px-4,
+                              py-4,
+                              px+4,
+                              py+4
+                          ),
+                          fill=(100, 235, 245)
+                      )
+
+              elif topic in [
+                  "Villagers",
+                  "Trading",
+                  "Zombie Villagers",
+                  "Iron Golem",
+                  "Raids",
+                  "Pillagers",
+                  "Ravagers"
+              ]:
+                  village_house(
+                      d,
+                      WIDTH/2,
+                      900,
+                      1
+                  )
+
+                  for i in range(4):
+                      x = 120+i*170
+
+                      d.ellipse(
+                          (
+                              x-25,
+                              690,
+                              x+25,
+                              740
+                          ),
+                          fill=(185, 125, 85)
+                      )
+
+                      d.rectangle(
+                          (
+                              x-30,
+                              740,
+                              x+30,
+                              850
+                          ),
+                          fill=(80+i*20, 100, 150)
+                      )
+
+              elif topic in [
+                  "Desert Temples",
+                  "Archaeology",
+                  "Camels",
+                  "Eyes of Ender"
+              ]:
+                  for i in range(5):
+                      block(
+                          d,
+                          90+i*120,
+                          860,
+                          95,
+                          (205, 155, 75),
+                          2
+                      )
+
+                  d.polygon(
+                      [
+                          (180, 650),
+                          (360, 500),
+                          (540, 650)
+                      ],
+                      fill=(185, 130, 60)
+                  )
+
+                  d.rectangle(
+                      (305, 650, 415, 900),
+                      fill=(125, 85, 45)
+                  )
+
+              elif topic in [
+                  "Spiders",
+                  "Skeletons",
+                  "Zombies",
+                  "Mobs"
+              ]:
+                  cx = WIDTH/2 + math.sin(t*8)*150
+                  cy = 800
+
+                  d.ellipse(
+                      (
+                          cx-80,
+                          cy-50,
+                          cx+80,
+                          cy+50
+                      ),
+                      fill=(45, 45, 45)
+                  )
+
+                  for a in range(8):
+                      angle = a*math.pi/4
+
+                      x2 = cx+math.cos(angle)*180
+                      y2 = cy+math.sin(angle)*100
+
+                      d.line(
+                          (cx, cy, x2, y2),
+                          fill=(30, 30, 30),
+                          width=18
+                      )
+
+              elif topic in [
+                  "Aircraft",
+                  "Planes"
+              ]:
+                  pass
+
+              else:
+                  # Generic but highly animated block scene.
+                  for i in range(8):
+                      x = 35+i*90
+                      y = 850 + int(
+                          math.sin(
+                              frame*0.05+i
+                          )*25
+                      )
+
+                      block(
+                          d,
+                          x,
+                          y,
+                          75,
+                          (
+                              60+i*7,
+                              120+i*5,
+                              70+i*4
+                          ),
+                          1+(i%3)
+                      )
+
+                  projectile_x = (
+                      -100 +
+                      t*(WIDTH+200)
+                  )
+
+                  projectile_y = (
+                      650 +
+                      math.sin(t*15)*100
+                  )
+
+                  fireball(
+                      d,
+                      projectile_x,
+                      projectile_y,
+                      15
+                  )
+
+          # ============================================================
+          # CINEMATIC EFFECTS
+          # ============================================================
+
+          def cinematic(img, frame, intensity=1):
+              img = img.convert("RGBA")
+
+              overlay = Image.new(
+                  "RGBA",
+                  img.size,
+                  (0, 0, 0, 0)
+              )
+
+              d = ImageDraw.Draw(overlay)
+
+              # Top/bottom cinematic bars.
+              bar = int(55*intensity)
+
+              d.rectangle(
+                  (0, 0, WIDTH, bar),
+                  fill=(0, 0, 0, 210)
+              )
+
+              d.rectangle(
+                  (
+                      0,
+                      HEIGHT-bar,
+                      WIDTH,
+                      HEIGHT
+                  ),
+                  fill=(0, 0, 0, 210)
+              )
+
+              # Vignette.
+              for i in range(10):
+                  margin = i*28
+
+                  d.rectangle(
+                      (
+                          margin,
+                          margin,
+                          WIDTH-margin,
+                          HEIGHT-margin
+                      ),
+                      outline=(0, 0, 0, 10+i*5),
+                      width=22
+                  )
+
+              # Lens streak.
+              streak_y = int(
+                  250 +
+                  math.sin(frame*0.025)*500
+              )
+
+              d.rectangle(
+                  (
+                      0,
+                      streak_y,
+                      WIDTH,
+                      streak_y+2
+                  ),
+                  fill=(255, 255, 255, 18)
+              )
+
+              return Image.alpha_composite(
+                  img,
+                  overlay
+              ).convert("RGB")
+
+          def particles(img, frame, style):
+              d = ImageDraw.Draw(img)
+
+              for i in range(45):
+                  x = (
+                      i*151 +
+                      frame*(1+(i%4))
+                  ) % WIDTH
+
+                  y = (
+                      i*83 +
+                      int(
+                          math.sin(
+                              frame*0.035+i
+                          )*100
+                      )
+                  ) % HEIGHT
+
+                  size = 1+(i%4)
+
+                  if style == "nether":
+                      colour = (255, 100, 30)
+                  elif style == "ocean":
+                      colour = (100, 230, 240)
+                  elif style == "end":
+                      colour = (210, 160, 255)
+                  else:
+                      colour = (255, 255, 255)
+
+                  d.rectangle(
+                      (
+                          x-size,
+                          y-size,
+                          x+size,
+                          y+size
+                      ),
+                      fill=colour
+                  )
+
+          # ============================================================
+          # TEXT
+          # ============================================================
+
+          def wrap(draw, text, fnt, maximum):
+              words = text.split()
               lines = []
               current = ""
 
-              for word in hook_words:
-                  test = (current + " " + word).strip()
+              for word in words:
+                  test = (
+                      word
+                      if not current
+                      else current+" "+word
+                  )
 
-                  if draw.textbbox((0, 0), test, font=big_font)[2] < 900:
+                  box = draw.textbbox(
+                      (0, 0),
+                      test,
+                      font=fnt
+                  )
+
+                  if box[2] <= maximum:
                       current = test
                   else:
-                      lines.append(current)
+                      if current:
+                          lines.append(current)
+
                       current = word
 
               if current:
                   lines.append(current)
 
-              text_y = 250
+              return lines
 
-              for line in lines[:4]:
-                  bbox = draw.textbbox((0, 0), line, font=big_font)
-                  text_width = bbox[2] - bbox[0]
-                  x = (WIDTH - text_width) // 2
+          def caption(img, text, y, small=False):
+              overlay = Image.new(
+                  "RGBA",
+                  img.size,
+                  (0, 0, 0, 0)
+              )
 
-                  draw.text(
-                      (x + 4, text_y + 4),
+              d = ImageDraw.Draw(overlay)
+
+              fnt = (
+                  FONT_SMALL
+                  if small
+                  else FONT_FACT
+              )
+
+              lines = wrap(
+                  d,
+                  text,
+                  fnt,
+                  WIDTH-80
+              )
+
+              line_h = 44 if not small else 32
+              box_h = len(lines)*line_h+40
+
+              d.rounded_rectangle(
+                  (
+                      28,
+                      y,
+                      WIDTH-28,
+                      y+box_h
+                  ),
+                  radius=22,
+                  fill=(0, 0, 0, 185)
+              )
+
+              cy = y+18
+
+              for line in lines:
+                  box = d.textbbox(
+                      (0, 0),
                       line,
-                      font=big_font,
-                      fill=(0, 0, 0)
+                      font=fnt
                   )
 
-                  draw.text(
-                      (x, text_y),
+                  tw = box[2]-box[0]
+                  x = (WIDTH-tw)//2
+
+                  d.text(
+                      (x+3, cy+3),
                       line,
-                      font=big_font,
-                      fill=(255, 255, 255)
+                      font=fnt,
+                      fill=(0, 0, 0, 255)
                   )
 
-                  text_y += 85
+                  d.text(
+                      (x, cy),
+                      line,
+                      font=fnt,
+                      fill=(255, 255, 255, 255)
+                  )
 
-              img = Image.alpha_composite(
+                  cy += line_h
+
+              return Image.alpha_composite(
                   img.convert("RGBA"),
                   overlay
               ).convert("RGB")
 
-              img.save(
-                  f"{frames_dir}/frame_{frame:05d}.jpg",
-                  quality=88
+          # ============================================================
+          # VOICE
+          # ============================================================
+
+          def make_voice(script):
+              path = OUTPUT/"voice.wav"
+
+              speed = rng.choice([
+                  145,
+                  150,
+                  155
+              ])
+
+              pitch = rng.choice([
+                  32,
+                  35,
+                  38,
+                  40
+              ])
+
+              voices = [
+                  "en-us+m3",
+                  "en-us+m2"
+              ]
+
+              voice = rng.choice(voices)
+
+              subprocess.run(
+                  [
+                      "espeak-ng",
+                      "-v",
+                      voice,
+                      "-s",
+                      str(speed),
+                      "-p",
+                      str(pitch),
+                      "-a",
+                      "175",
+                      "-g",
+                      "4",
+                      "-w",
+                      str(path),
+                      script
+                  ],
+                  check=True
               )
 
-          # ---------------------------------------------------------
-          # CINEMATIC MUSIC
-          # ---------------------------------------------------------
+              return path
 
-          sample_rate = 44100
-          duration = DURATION
+          # ============================================================
+          # MUSIC
+          # ============================================================
 
-          t = np.linspace(
-              0,
-              duration,
-              int(sample_rate * duration),
-              endpoint=False
-          )
+          def make_music():
+              path = OUTPUT/"music.wav"
 
-          music = (
-              0.07 * np.sin(2 * np.pi * 110 * t) +
-              0.04 * np.sin(2 * np.pi * 220 * t) +
-              0.025 * np.sin(2 * np.pi * 330 * t)
-          )
+              rate = 44100
+              total = int(rate*DURATION)
 
-          # Gentle pulse
-          pulse = 0.5 + 0.5 * np.sin(2 * np.pi * 1.2 * t)
-          music *= (0.7 + 0.3 * pulse)
+              audio = np.zeros(
+                  total,
+                  dtype=np.float32
+              )
 
-          music = np.clip(music, -1, 1)
+              scales = [
+                  [55, 65.41, 73.42, 82.41],
+                  [65.41, 73.42, 87.31, 98],
+                  [73.42, 82.41, 98, 110]
+              ]
 
-          audio = np.int16(music * 32767)
+              notes = rng.choice(scales)
 
-          with wave.open("output/music.wav", "w") as wf:
-              wf.setnchannels(1)
-              wf.setsampwidth(2)
-              wf.setframerate(sample_rate)
-              wf.writeframes(audio.tobytes())
+              for i in range(12):
+                  freq = notes[i % len(notes)]
 
-          # ---------------------------------------------------------
-          # BUILD VIDEO
-          # ---------------------------------------------------------
+                  start = int(
+                      i*total/12
+                  )
 
-          subprocess.run([
-              "ffmpeg",
-              "-y",
-              "-framerate", str(FPS),
-              "-i", "frames/frame_%05d.jpg",
-              "-i", "output/voice.wav",
-              "-i", "output/music.wav",
-              "-filter_complex",
-              "[2:a]volume=0.25[music];"
-              "[1:a]volume=1.0[voice];"
-              "[voice][music]amix=inputs=2:duration=first[audio]",
-              "-map", "0:v",
-              "-map", "[audio]",
-              "-vf",
-              "subtitles=output/captions.srt:"
-              "force_style='FontName=DejaVu Sans,"
-              "FontSize=18,"
-              "PrimaryColour=&H00FFFFFF,"
-              "OutlineColour=&H00000000,"
-              "BorderStyle=1,"
-              "Outline=3,"
-              "Shadow=1,"
-              "Alignment=2,"
-              "MarginV=220'",
-              "-c:v", "libx264",
-              "-preset", "veryfast",
-              "-crf", "25",
-              "-pix_fmt", "yuv420p",
-              "-c:a", "aac",
-              "-b:a", "128k",
-              "-movflags", "+faststart",
-              "-t", str(DURATION),
-              "output/block-fuel-short.mp4"
-          ], check=True)
+                  end = min(
+                      total,
+                      start+int(rate*1.8)
+                  )
 
-          print("========================================")
-          print("🔥 BLOCK FUEL VIDEO CREATED")
-          print("========================================")
-          print("Title:", title)
-          print("File: output/block-fuel-short.mp4")
-          print("========================================")
+                  n = end-start
+
+                  if n <= 0:
+                      continue
+
+                  tt = np.arange(n)/rate
+
+                  wave_a = np.sin(
+                      2*np.pi*freq*tt
+                  )
+
+                  wave_b = 0.35*np.sin(
+                      2*np.pi*freq*2*tt
+                  )
+
+                  wave_c = 0.15*np.sin(
+                      2*np.pi*freq*3*tt
+                  )
+
+                  envelope = np.minimum(
+                      1,
+                      tt*5
+                  ) * np.exp(
+                      -tt*0.7
+                  )
+
+                  audio[start:end] += (
+                      wave_a+
+                      wave_b+
+                      wave_c
+                  )*envelope*0.045
+
+              # cinematic low pulse
+              tt = np.arange(total)/rate
+
+              audio += (
+                  np.sin(
+                      2*np.pi*1.25*tt
+                  )*0.012
+              )
+
+              # subtle high atmosphere
+              audio += (
+                  np.sin(
+                      2*np.pi*330*tt
+                  )*0.002
+              )
+
+              audio = np.clip(
+                  audio,
+                  -0.8,
+                  0.8
+              )
+
+              pcm = (
+                  audio*32767
+              ).astype(np.int16)
+
+              with wave.open(
+                  str(path),
+                  "wb"
+              ) as wf:
+                  wf.setnchannels(1)
+                  wf.setsampwidth(2)
+                  wf.setframerate(rate)
+                  wf.writeframes(
+                      pcm.tobytes()
+                  )
+
+              return path
+
+          # ============================================================
+          # CREATE VIDEO
+          # ============================================================
+
+          def make_video(topic, fact, environment_a):
+              frames = OUTPUT/"frames"
+
+              if frames.exists():
+                  shutil.rmtree(frames)
+
+              frames.mkdir()
+
+              all_styles = list(BIOMES.keys())
+
+              environment_b = rng.choice(
+                  [
+                      s for s in all_styles
+                      if s != environment_a
+                  ]
+              )
+
+              environment_c = rng.choice(
+                  [
+                      s for s in all_styles
+                      if s not in [
+                          environment_a,
+                          environment_b
+                      ]
+                  ]
+              )
+
+              # Six distinct shots.
+              shots = [
+                  (0, 3, environment_a),
+                  (3, 6, environment_a),
+                  (6, 9, environment_b),
+                  (9, 12, environment_b),
+                  (12, 15, environment_c),
+                  (15, 18, environment_c)
+              ]
+
+              for frame in range(TOTAL_FRAMES):
+                  seconds = frame/FPS
+
+                  active_style = environment_c
+                  shot = 5
+
+                  for index, (
+                      start,
+                      end,
+                      style
+                  ) in enumerate(shots):
+
+                      if start <= seconds < end:
+                          active_style = style
+                          shot = index
+                          break
+
+                  img = environment(
+                      active_style,
+                      frame
+                  )
+
+                  render_subject(
+                      img,
+                      topic,
+                      active_style,
+                      frame,
+                      shot
+                  )
+
+                  particles(
+                      img,
+                      frame,
+                      active_style
+                  )
+
+                  # Camera movement.
+                  progress = (
+                      frame/TOTAL_FRAMES
+                  )
+
+                  camera_x = int(
+                      math.sin(
+                          progress*math.pi*2
+                      )*22
+                  )
+
+                  camera_y = int(
+                      math.cos(
+                          progress*math.pi*3
+                      )*12
+                  )
+
+                  if shot in [1, 3]:
+                      camera_x += int(
+                          math.sin(frame*0.35)*5
+                      )
+
+                  if shot == 4:
+                      camera_x += int(
+                          math.sin(frame*0.7)*12
+                      )
+
+                  if camera_x != 0 or camera_y != 0:
+                      shifted = Image.new(
+                          "RGB",
+                          (
+                              WIDTH,
+                              HEIGHT
+                          )
+                      )
+
+                      shifted.paste(
+                          img,
+                          (
+                              camera_x,
+                              camera_y
+                          )
+                      )
+
+                      img = shifted
+
+                  # Shot transition flash.
+                  if frame % (FPS*3) < 4:
+                      flash = Image.new(
+                          "RGBA",
+                          img.size,
+                          (255,255,255,70)
+                      )
+
+                      img = Image.alpha_composite(
+                          img.convert("RGBA"),
+                          flash
+                      ).convert("RGB")
+
+                  # Captions.
+                  if seconds < 3:
+                      text = HOOK
+                      y = 850
+
+                  elif seconds < 15:
+                      text = fact
+                      y = 865
+
+                  else:
+                      text = ENDING
+                      y = 900
+
+                  img = caption(
+                      img,
+                      text,
+                      y
+                  )
+
+                  # Shot number indicator.
+                  d = ImageDraw.Draw(img)
+
+                  d.rounded_rectangle(
+                      (
+                          25,
+                          25,
+                          135,
+                          65
+                      ),
+                      radius=12,
+                      fill=(0,0,0)
+                  )
+
+                  d.text(
+                      (42, 32),
+                      f"{shot+1}/6",
+                      font=FONT_SMALL,
+                      fill=(255,255,255)
+                  )
+
+                  # Progress bar.
+                  progress = (
+                      frame/
+                      max(1, TOTAL_FRAMES-1)
+                  )
+
+                  d.rectangle(
+                      (
+                          0,
+                          HEIGHT-7,
+                          int(WIDTH*progress),
+                          HEIGHT
+                      ),
+                      fill=(255,255,255)
+                  )
+
+                  img = cinematic(
+                      img,
+                      frame
+                  )
+
+                  filename = (
+                      frames/
+                      f"frame_{frame:05d}.png"
+                  )
+
+                  img.save(
+                      filename
+                  )
+
+              raw = OUTPUT/"raw.mp4"
+
+              subprocess.run(
+                  [
+                      "ffmpeg",
+                      "-y",
+                      "-framerate",
+                      str(FPS),
+                      "-i",
+                      str(
+                          frames/
+                          "frame_%05d.png"
+                      ),
+                      "-c:v",
+                      "libx264",
+                      "-preset",
+                      "veryfast",
+                      "-crf",
+                      "21",
+                      "-pix_fmt",
+                      "yuv420p",
+                      "-movflags",
+                      "+faststart",
+                      str(raw)
+                  ],
+                  check=True
+              )
+
+              return (
+                  raw,
+                  environment_a,
+                  environment_b,
+                  environment_c
+              )
+
+          # ============================================================
+          # FINAL AUDIO + VIDEO
+          # ============================================================
+
+          def combine(raw, voice, music):
+              final = (
+                  OUTPUT/
+                  "block_fuel_short.mp4"
+              )
+
+              subprocess.run(
+                  [
+                      "ffmpeg",
+                      "-y",
+                      "-i",
+                      str(raw),
+                      "-i",
+                      str(voice),
+                      "-i",
+                      str(music),
+                      "-filter_complex",
+                      "[1:a]volume=1.0[v];"
+                      "[2:a]volume=0.16[m];"
+                      "[v][m]amix="
+                      "inputs=2:"
+                      "duration=first:"
+                      "dropout_transition=2[a]",
+                      "-map",
+                      "0:v",
+                      "-map",
+                      "[a]",
+                      "-c:v",
+                      "libx264",
+                      "-preset",
+                      "veryfast",
+                      "-crf",
+                      "20",
+                      "-c:a",
+                      "aac",
+                      "-b:a",
+                      "160k",
+                      "-shortest",
+                      "-movflags",
+                      "+faststart",
+                      str(final)
+                  ],
+                  check=True
+              )
+
+              return final
+
+          # ============================================================
+          # MAIN
+          # ============================================================
+
+          def main():
+              global HOOK
+              global ENDING
+
+              selected = rng.choice(FACTS)
+
+              topic = selected[0]
+              fact = selected[1]
+              default_environment = selected[2]
+
+              HOOK = rng.choice(HOOKS)
+              ENDING = rng.choice(ENDINGS)
+
+              script = (
+                  HOOK +
+                  " " +
+                  fact +
+                  " " +
+                  ENDING
+              )
+
+              print("")
+              print("====================================")
+              print("BLOCK FUEL")
+              print("====================================")
+              print(f"Seed: {SEED}")
+              print(f"Topic: {topic}")
+              print(f"Fact: {fact}")
+              print(f"Hook: {HOOK}")
+              print(f"Ending: {ENDING}")
+              print("====================================")
+
+              voice = make_voice(script)
+
+              music = make_music()
+
+              raw, scene_a, scene_b, scene_c = make_video(
+                  topic,
+                  fact,
+                  default_environment
+              )
+
+              final = combine(
+                  raw,
+                  voice,
+                  music
+              )
+
+              titles = [
+                  f"This Minecraft Fact Sounds Fake",
+                  f"Most Players Don't Know This Minecraft Fact",
+                  f"You Probably Missed This Minecraft Detail",
+                  f"Minecraft Has A Secret Most Players Miss",
+                  f"This Minecraft Detail Is Actually Crazy",
+                  f"One Minecraft Fact You Should Know"
+              ]
+
+              title = rng.choice(titles)
+
+              description = (
+                  f"{fact}\n\n"
+                  "Minecraft facts, mechanics and details.\n"
+                  "Follow for more Minecraft facts."
+              )
+
+              with open(
+                  OUTPUT/"title.txt",
+                  "w",
+                  encoding="utf-8"
+              ) as f:
+                  f.write(title)
+
+              with open(
+                  OUTPUT/"description.txt",
+                  "w",
+                  encoding="utf-8"
+              ) as f:
+                  f.write(description)
+
+              metadata = {
+                  "seed": SEED,
+                  "topic": topic,
+                  "fact": fact,
+                  "hook": HOOK,
+                  "ending": ENDING,
+                  "scene_1": scene_a,
+                  "scene_2": scene_b,
+                  "scene_3": scene_c,
+                  "title": title,
+                  "duration": DURATION,
+                  "fps": FPS,
+                  "resolution": f"{WIDTH}x{HEIGHT}",
+                  "shots": 6
+              }
+
+              with open(
+                  OUTPUT/"fact.json",
+                  "w",
+                  encoding="utf-8"
+              ) as f:
+                  json.dump(
+                      metadata,
+                      f,
+                      indent=2
+                  )
+
+              # Remove temporary render files.
+              frames = OUTPUT/"frames"
+
+              if frames.exists():
+                  shutil.rmtree(frames)
+
+              if raw.exists():
+                  raw.unlink()
+
+              print("")
+              print("====================================")
+              print("BLOCK FUEL COMPLETE")
+              print("====================================")
+              print(f"Video: {final}")
+              print(f"Topic: {topic}")
+              print(f"Scene 1: {scene_a}")
+              print(f"Scene 2: {scene_b}")
+              print(f"Scene 3: {scene_c}")
+              print(f"Title: {title}")
+              print("====================================")
+
+          if __name__ == "__main__":
+              main()
           PY
 
-          python create_video.py
+      - name: Generate Short
+        run: |
+          python generator/main.py
 
-      - name: Upload finished video
+      - name: Show generated files
+        run: |
+          echo "=============================="
+          echo "GENERATED FILES"
+          echo "=============================="
+          ls -lah output/
+
+      - name: Upload generated Short
         uses: actions/upload-artifact@v4
         with:
-          name: Block-Fuel-Short
-          path: output/
+          name: block-fuel-short-${{ github.run_number }}
+          path: |
+            output/block_fuel_short.mp4
+            output/title.txt
+            output/description.txt
+            output/fact.json
           retention-days: 7
