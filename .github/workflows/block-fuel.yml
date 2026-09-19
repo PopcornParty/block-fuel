@@ -9,7 +9,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -28,1056 +28,1736 @@ jobs:
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
-          pip install requests piper-tts
+          python -m pip install pillow numpy piper-tts
 
-      - name: Download Piper voice
+      - name: Download voice
         run: |
-          mkdir -p voice
-          python -m piper.download_voices \
-            --data-dir voice \
-            en_GB-alan-medium
+          mkdir -p voices
+          python -m piper.download_voices en_US-ryan-high --data-dir voices
 
       - name: Create generator
         run: |
           mkdir -p generator
-
           cat > generator/main.py <<'PY'
           import os
+          import sys
+          import math
+          import wave
           import random
+          import shutil
           import subprocess
-          import json
-          import time
           from pathlib import Path
 
-          import requests
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 
-          ROOT = Path.cwd()
-          OUT = ROOT / "output"
-          DOWNLOADS = ROOT / "downloads"
-          SEGMENTS = ROOT / "segments"
-          VOICE_DIR = ROOT / "voice"
+          # ============================================================
+          # BLOCK FUEL
+          # Reliable offline Minecraft fact Short generator.
+          #
+          # No web API.
+          # No external footage.
+          # No API keys.
+          #
+          # Visuals are generated specifically for the selected fact.
+          # ============================================================
+
+
+          OUT = Path("output")
+          TEMP = Path("temp")
+          VOICES = Path("voices")
 
           OUT.mkdir(exist_ok=True)
-          DOWNLOADS.mkdir(exist_ok=True)
-          SEGMENTS.mkdir(exist_ok=True)
+          TEMP.mkdir(exist_ok=True)
 
-          PEXELS_KEY = os.environ.get("PEXELS_API_KEY", "").strip()
+          WIDTH = 540
+          HEIGHT = 960
+          FPS = 24
+          VIDEO_SECONDS = 27
 
-          random.seed(int(time.time() * 1000000))
+          random.seed()
 
 
-          # ============================================================
-          # REAL MINECRAFT FACTS
-          # ============================================================
+          # ------------------------------------------------------------
+          # Fonts
+          # ------------------------------------------------------------
+
+          FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+          FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+          def font(size, bold=False):
+              return ImageFont.truetype(
+                  FONT_BOLD if bold else FONT_REGULAR,
+                  size
+              )
+
+
+          # ------------------------------------------------------------
+          # Detailed factual content
+          #
+          # These are gameplay/mechanics facts designed to be robust
+          # across modern Minecraft versions where possible.
+          # ------------------------------------------------------------
 
           FACTS = [
-              {
-                  "fact": "Creepers were created after the developer accidentally made a pig with the wrong shape.",
-                  "search": "gaming pixel blocks green",
-              },
-              {
-                  "fact": "A charged creeper is created when lightning strikes close enough to a creeper.",
-                  "search": "lightning storm night",
-              },
-              {
-                  "fact": "Redstone can transmit power and is used to build mechanisms such as doors, farms and automated machines.",
-                  "search": "electronics circuit technology",
-              },
-              {
-                  "fact": "A Nether portal is activated using fire on an obsidian frame.",
-                  "search": "purple portal fantasy",
-              },
-              {
-                  "fact": "Ender pearls can teleport the player to the location where the pearl lands.",
-                  "search": "glowing purple orb fantasy",
-              },
-              {
-                  "fact": "A compass normally points toward the world spawn point rather than toward the player's bed.",
-                  "search": "compass navigation map",
-              },
-              {
-                  "fact": "A lodestone can change what a compass points toward when the compass is linked to it.",
-                  "search": "ancient stone compass",
-              },
-              {
-                  "fact": "A clock shows the approximate position of the sun and moon and therefore indicates the Minecraft time of day.",
-                  "search": "clock gears time",
-              },
-              {
-                  "fact": "Iron golems can naturally appear in villages and can also be built by players.",
-                  "search": "stone golem fantasy",
-              },
-              {
-                  "fact": "Villagers can use workstations to take on different professions.",
-                  "search": "medieval village market",
-              },
-              {
-                  "fact": "Sugar cane grows next to water and can be used to make paper.",
-                  "search": "sugar cane field water",
-              },
-              {
-                  "fact": "Obsidian is created when flowing water comes into contact with a lava source block.",
-                  "search": "lava volcanic rock",
-              },
-              {
-                  "fact": "Ghasts can shoot explosive fireballs at players.",
-                  "search": "fireball fantasy sky",
-              },
-              {
-                  "fact": "A ghast fireball can be deflected by attacking it at the right moment.",
-                  "search": "fireball explosion",
-              },
-              {
-                  "fact": "Blazes are Nether mobs that can fly and attack by launching fireballs.",
-                  "search": "fire flames fantasy",
-              },
-              {
-                  "fact": "Slimes can split into smaller slimes when larger slimes are defeated.",
-                  "search": "green slime",
-              },
-              {
-                  "fact": "A piston can push blocks when powered by redstone, which makes it useful for automated contraptions.",
-                  "search": "mechanical machine gears",
-              },
-              {
-                  "fact": "Sticky pistons can pull a block back when they retract.",
-                  "search": "mechanical machine",
-              },
-              {
-                  "fact": "Observers detect block updates and can output a short redstone pulse.",
-                  "search": "electronic sensor circuit",
-              },
-              {
-                  "fact": "Hoppers can move items between containers and other inventories.",
-                  "search": "factory conveyor machine",
-              },
-              {
-                  "fact": "Minecarts can travel along rails and can be powered by powered rails.",
-                  "search": "train railway moving",
-              },
-              {
-                  "fact": "Boats can travel across water and can also be used to transport mobs.",
-                  "search": "boat lake moving",
-              },
-              {
-                  "fact": "Elytra allow players to glide through the air after jumping from a height.",
-                  "search": "skydiving flying aerial",
-              },
-              {
-                  "fact": "Firework rockets can be used while gliding with elytra to help maintain or increase flight speed.",
-                  "search": "fireworks night sky",
-              },
-              {
-                  "fact": "A trident can be thrown as a projectile and can also be used as a melee weapon.",
-                  "search": "ocean underwater",
-              },
-              {
-                  "fact": "Guardians are hostile underwater mobs that use a ranged laser attack.",
-                  "search": "underwater temple ocean",
-              },
-              {
-                  "fact": "Turtles can lay eggs on beaches and return to the beach where they were spawned to lay eggs.",
-                  "search": "sea turtle beach",
-              },
-              {
-                  "fact": "Amethyst geodes are underground structures containing amethyst blocks and budding amethyst.",
-                  "search": "purple crystal cave",
-              },
-              {
-                  "fact": "Amethyst crystals grow from budding amethyst blocks over time.",
-                  "search": "crystals cave",
-              },
-              {
-                  "fact": "Copper blocks can change appearance over time as they oxidize.",
-                  "search": "copper metal oxidation",
-              },
-              {
-                  "fact": "Bees can pollinate flowers and then return to their hive or nest.",
-                  "search": "bee flower macro",
-              },
-              {
-                  "fact": "Soul campfires burn with blue flames.",
-                  "search": "blue fire flame",
-              },
-              {
-                  "fact": "The Wither is a summonable boss that can be created using soul sand or soul soil and three wither skeleton skulls.",
-                  "search": "dark fantasy storm",
-              },
-              {
-                  "fact": "The Ender Dragon can destroy many blocks while moving through the End.",
-                  "search": "dragon flying sky",
-              },
-              {
-                  "fact": "End crystals can heal the Ender Dragon while they remain active on the obsidian pillars.",
-                  "search": "crystal energy fantasy",
-              },
-              {
-                  "fact": "Breaking an end crystal causes an explosion.",
-                  "search": "crystal explosion fantasy",
-              },
-              {
-                  "fact": "Snowballs can be thrown as projectiles even though they normally deal no damage to most mobs.",
-                  "search": "snowball winter",
-              },
-              {
-                  "fact": "Eggs can be thrown as projectiles and have a chance to spawn a chicken.",
-                  "search": "chicken farm countryside",
-              },
-              {
-                  "fact": "A shield can block many incoming attacks when the player is using it.",
-                  "search": "medieval shield warrior",
-              },
-              {
-                  "fact": "Fire resistance protects a player from most fire and lava damage while the effect lasts.",
-                  "search": "fire lava protection",
-              },
-              {
-                  "fact": "Water can extinguish fire blocks and can protect players from some fire-related hazards.",
-                  "search": "water fire extinguishing",
-              },
-              {
-                  "fact": "Packed ice does not melt in the same way as normal ice.",
-                  "search": "ice glacier blue",
-              },
-              {
-                  "fact": "Blue ice can be used for fast boat travel.",
-                  "search": "blue ice glacier boat",
-              },
-              {
-                  "fact": "Glass can be crafted from sand by smelting it in a furnace.",
-                  "search": "glass making furnace",
-              },
-              {
-                  "fact": "An anvil can combine, repair and rename certain items while using experience levels.",
-                  "search": "blacksmith anvil sparks",
-              },
-              {
-                  "fact": "Armor trims change the appearance of armor without changing its basic protection value.",
-                  "search": "fantasy armor",
-              },
-              {
-                  "fact": "Netherite equipment is highly durable and does not burn when dropped into fire or lava.",
-                  "search": "metal armor lava",
-              },
-              {
-                  "fact": "Coal can be used as furnace fuel and can also be crafted into torches.",
-                  "search": "coal mining underground",
-              },
-              {
-                  "fact": "A furnace smelts or cooks items by consuming fuel.",
-                  "search": "furnace fire metal",
-              },
-              {
-                  "fact": "Blast furnaces are designed for smelting ores and certain metal-related items faster than a normal furnace.",
-                  "search": "industrial furnace metal",
-              },
-              {
-                  "fact": "Smokers are designed for cooking food faster than a normal furnace.",
-                  "search": "cooking food smoke",
-              },
-              {
-                  "fact": "A crafting table provides the full three-by-three crafting grid.",
-                  "search": "wood crafting workshop",
-              },
-              {
-                  "fact": "A stonecutter can be used to craft certain stone-related blocks more efficiently than some crafting recipes.",
-                  "search": "stone cutting workshop",
-              },
-              {
-                  "fact": "Maps can be expanded using paper at a cartography table.",
-                  "search": "old map table",
-              },
-              {
-                  "fact": "A recovery compass points toward the location of the player's most recent death when usable information about that death exists.",
-                  "search": "compass dark map",
-              },
-              {
-                  "fact": "A spyglass lets players zoom their view into distant objects.",
-                  "search": "telescope mountain view",
-              },
-              {
-                  "fact": "A carved pumpkin can be worn as a helmet and changes the player's view while worn.",
-                  "search": "pumpkin autumn field",
-              },
-              {
-                  "fact": "Name tags can give mobs custom names when used through an anvil.",
-                  "search": "pet dog name tag",
-              },
-              {
-                  "fact": "Cats can scare away creepers and phantoms when those mobs are within the relevant avoidance range.",
-                  "search": "cat night animal",
-              },
-              {
-                  "fact": "Wolves can be tamed and can follow their owner.",
-                  "search": "wolf forest animal",
-              },
-              {
-                  "fact": "Parrots can imitate the sounds of nearby hostile mobs.",
-                  "search": "parrot tropical bird",
-              },
-              {
-                  "fact": "Goats can jump unusually high compared with many other passive mobs.",
-                  "search": "mountain goat jumping",
-              },
-              {
-                  "fact": "Frogs can eat small slimes and magma cubes, producing different froglight colours from magma cubes.",
-                  "search": "frog wetland pond",
-              },
-              {
-                  "fact": "Froglights are light-emitting blocks that come in multiple colours.",
-                  "search": "glowing lights colorful",
-              },
-              {
-                  "fact": "Sculk sensors can detect vibrations and output redstone signals.",
-                  "search": "blue glowing sensor",
-              },
-              {
-                  "fact": "The Warden is a blind hostile mob that detects vibrations and movement rather than relying on normal eyesight.",
-                  "search": "dark cave glowing blue",
-              },
-              {
-                  "fact": "Ancient cities generate deep underground in the Deep Dark biome.",
-                  "search": "ancient underground ruins",
-              },
-              {
-                  "fact": "Strongholds contain End portals and can be found underground.",
-                  "search": "ancient underground fortress",
-              },
-              {
-                  "fact": "Eyes of Ender can be used to locate the general direction of a stronghold.",
-                  "search": "glowing eye fantasy",
-              },
-              {
-                  "fact": "Bastion remnants are large Nether structures containing dangerous mobs and valuable loot.",
-                  "search": "ancient blackstone fortress",
-              },
-              {
-                  "fact": "Piglins are attracted to gold and can barter with players using gold ingots.",
-                  "search": "gold coins treasure",
-              },
-              {
-                  "fact": "Striders can walk across lava and can be ridden when controlled with the appropriate item.",
-                  "search": "lava volcanic creature",
-              },
-              {
-                  "fact": "Soul sand slows movement across its surface.",
-                  "search": "dark sand desert",
-              },
-              {
-                  "fact": "Soul speed is an enchantment that increases movement speed across soul sand and soul soil.",
-                  "search": "blue fire dark landscape",
-              },
-              {
-                  "fact": "Redstone repeaters can extend redstone signals and control their delay.",
-                  "search": "electronic circuit blinking",
-              },
-              {
-                  "fact": "Redstone comparators can compare or measure signal strength from certain blocks and circuits.",
-                  "search": "electronic circuit board",
-              },
-              {
-                  "fact": "Daylight sensors output different redstone signal strengths depending on available daylight.",
-                  "search": "sunrise sunlight city",
-              },
-              {
-                  "fact": "Target blocks can output a redstone signal when hit by a projectile.",
-                  "search": "archery target arrow",
-              },
-              {
-                  "fact": "Note blocks can play different musical notes depending on the block underneath them.",
-                  "search": "music notes piano",
-              },
-              {
-                  "fact": "Jukeboxes can play music discs when a disc is inserted.",
-                  "search": "vinyl record music player",
-              },
-              {
-                  "fact": "Fireworks can create different shapes and colours depending on how their crafting ingredients are configured.",
-                  "search": "fireworks night sky",
-              },
-              {
-                  "fact": "Banners can be customised with patterns and colours.",
-                  "search": "colorful flags fabric",
-              },
-              {
-                  "fact": "Item frames can display items on walls and other surfaces.",
-                  "search": "museum display frame",
-              },
-              {
-                  "fact": "Armor stands can display wearable equipment.",
-                  "search": "medieval armor display",
-              },
-              {
-                  "fact": "Composting certain plant and food items can produce bone meal.",
-                  "search": "compost garden plants",
-              },
-              {
-                  "fact": "Bone meal can speed up the growth of many plants and crops.",
-                  "search": "plants growing time lapse",
-              },
-              {
-                  "fact": "Cactus damages entities that touch it.",
-                  "search": "desert cactus close up",
-              },
-              {
-                  "fact": "Sponges can absorb nearby water when placed in water.",
-                  "search": "sponge underwater ocean",
-              },
-              {
-                  "fact": "Leather boots allow players to walk on powder snow without sinking into it.",
-                  "search": "winter boots snow",
-              },
-              {
-                  "fact": "Campfires can create columns of smoke that can be seen from a distance.",
-                  "search": "campfire smoke mountain",
-              },
-              {
-                  "fact": "Iron doors require a redstone signal or another mechanism to open.",
-                  "search": "metal door opening",
-              },
-              {
-                  "fact": "Pressure plates can activate redstone when suitable entities or items interact with them.",
-                  "search": "pressure sensor machine",
-              },
-              {
-                  "fact": "Chorus fruit can teleport the player a short random distance when eaten.",
-                  "search": "purple alien fruit fantasy",
-              },
-              {
-                  "fact": "Shulker boxes keep their contents when broken and picked up.",
-                  "search": "purple storage box fantasy",
-              },
-              {
-                  "fact": "Ender chests allow a player to access the same personal storage inventory from different Ender chests.",
-                  "search": "magical chest purple",
-              },
-              {
-                  "fact": "Silk Touch allows certain blocks to be collected in forms that normally drop different items.",
-                  "search": "magic pickaxe mining",
-              },
-              {
-                  "fact": "Fortune can increase the amount of some resources obtained from certain blocks.",
-                  "search": "diamond mining crystals",
-              },
-              {
-                  "fact": "Mending uses experience orbs to repair equipped or held items that have the Mending enchantment.",
-                  "search": "magic glowing armor",
-              },
-              {
-                  "fact": "Unbreaking can reduce how quickly an item loses durability.",
-                  "search": "enchanted sword fantasy",
-              },
-              {
-                  "fact": "Feather Falling reduces fall damage on boots that have the enchantment.",
-                  "search": "boots falling mountain",
-              },
-              {
-                  "fact": "Depth Strider increases underwater movement speed when applied to boots.",
-                  "search": "diver underwater swimming",
-              },
-              {
-                  "fact": "Respiration allows a helmet to extend how long a player can stay underwater before drowning.",
-                  "search": "diver underwater",
-              },
-              {
-                  "fact": "Aqua Affinity increases underwater mining speed when applied to a helmet.",
-                  "search": "underwater mining diver",
-              },
-              {
-                  "fact": "Fire Aspect can set targets on fire when an affected melee attack connects.",
-                  "search": "flaming sword fantasy",
-              },
-              {
-                  "fact": "Looting can increase drops from some mobs when they are defeated with an affected weapon.",
-                  "search": "treasure loot fantasy",
-              },
-              {
-                  "fact": "Knockback increases how far affected targets are pushed by a melee attack.",
-                  "search": "fantasy warrior action",
-              },
-              {
-                  "fact": "Power increases the damage dealt by bows with the enchantment.",
-                  "search": "archer bow arrow",
-              },
-              {
-                  "fact": "Multishot allows a crossbow to fire multiple projectiles at once.",
-                  "search": "crossbow archer",
-              },
-              {
-                  "fact": "Quick Charge reduces the time needed to load a crossbow.",
-                  "search": "crossbow medieval",
+
+              {
+                  "topic": "Creepers",
+                  "theme": "creeper",
+                  "search": "creeper",
+                  "title": "The Creeper Was Never Supposed to Exist",
+                  "hook": "Minecraft's most famous enemy started as a complete accident.",
+                  "fact": (
+                      "The Creeper was created when Minecraft developer Markus Persson "
+                      "was trying to make a pig. The model was accidentally made much "
+                      "taller than intended, and instead of deleting the mistake, "
+                      "the design was turned into a hostile mob. The Creeper eventually "
+                      "became one of Minecraft's defining enemies because it silently "
+                      "approaches players before exploding. Its distinctive green body, "
+                      "four legs and unusual face have remained recognizable throughout "
+                      "Minecraft's history."
+                  ),
+                  "visuals": ["creeper", "forest", "explosion"]
+              },
+
+              {
+                  "topic": "Redstone",
+                  "theme": "redstone",
+                  "search": "redstone",
+                  "title": "Minecraft's Redstone Is Basically Digital Logic",
+                  "hook": "Minecraft has a surprisingly powerful computer system hiding underground.",
+                  "fact": (
+                      "Redstone can transmit signals through Minecraft's world and can "
+                      "be combined with components such as repeaters, comparators, "
+                      "observers, pistons and redstone torches. Players can use these "
+                      "components to create switches, automatic farms, doors, clocks, "
+                      "calculators and even computers. The important part is that "
+                      "redstone components follow predictable rules, allowing players "
+                      "to build increasingly complicated machines by connecting many "
+                      "small pieces of logic together."
+                  ),
+                  "visuals": ["redstone", "circuit", "machine"]
+              },
+
+              {
+                  "topic": "Ender Dragon",
+                  "theme": "dragon",
+                  "search": "ender dragon",
+                  "title": "The Ender Dragon Isn't Just a Giant Mob",
+                  "hook": "The Ender Dragon fight is built around a mechanic most players overlook.",
+                  "fact": (
+                      "The Ender Dragon's healing crystals are a major part of the "
+                      "fight because they continuously restore the dragon's health "
+                      "while it is near them. Players therefore have to deal with the "
+                      "End Crystals before they can reliably damage the dragon. "
+                      "The crystals sit on tall obsidian pillars around the central "
+                      "island, making the battle partly about movement and positioning "
+                      "rather than simply attacking the dragon. Destroying the crystals "
+                      "changes how the entire fight plays out."
+                  ),
+                  "visuals": ["end", "crystal", "dragon"]
+              },
+
+              {
+                  "topic": "Pistons",
+                  "theme": "piston",
+                  "search": "piston",
+                  "title": "Pistons Changed What Minecraft Could Build",
+                  "hook": "One block completely changed Minecraft engineering.",
+                  "fact": (
+                      "Pistons allow players to push blocks when powered by redstone, "
+                      "which made it possible to build machines that physically move "
+                      "parts of the world. Sticky pistons can also pull certain blocks "
+                      "back when their power is removed. This led to enormous numbers "
+                      "of player inventions, including hidden doors, elevators, "
+                      "automatic farms, flying machines and complicated redstone "
+                      "mechanisms. Pistons are one of the main reasons Minecraft "
+                      "engineering can go far beyond simple switches."
+                  ),
+                  "visuals": ["piston", "door", "machine"]
+              },
+
+              {
+                  "topic": "Villagers",
+                  "theme": "village",
+                  "search": "villager",
+                  "title": "Minecraft Villagers Have Their Own Working System",
+                  "hook": "Minecraft villagers don't just stand around waiting for you.",
+                  "fact": (
+                      "Villagers use job sites to determine their professions and can "
+                      "follow daily routines involving work and other activities. "
+                      "Different job-site blocks correspond to different professions, "
+                      "such as farmers, librarians and toolsmiths. Their trading system "
+                      "also gives players a way to obtain useful items without relying "
+                      "entirely on crafting or exploration. Villagers can therefore "
+                      "become part of large player-built trading systems, especially "
+                      "when their workstations and trading arrangements are carefully "
+                      "organized."
+                  ),
+                  "visuals": ["village", "villager", "trading"]
+              },
+
+              {
+                  "topic": "Ocean Monuments",
+                  "theme": "ocean",
+                  "search": "ocean monument",
+                  "title": "Ocean Monuments Are Basically Underwater Dungeons",
+                  "hook": "There are enormous structures hiding beneath Minecraft's oceans.",
+                  "fact": (
+                      "Ocean Monuments are large underwater structures built primarily "
+                      "from prismarine and related blocks. They contain rooms, corridors "
+                      "and dangerous guardians, including Elder Guardians. Exploring "
+                      "one is difficult because players have to deal with limited "
+                      "visibility, water movement and hostile mobs at the same time. "
+                      "The monuments can also contain valuable blocks and sponge rooms, "
+                      "making them useful targets for players willing to prepare for "
+                      "an underwater expedition."
+                  ),
+                  "visuals": ["ocean", "monument", "guardian"]
+              },
+
+              {
+                  "topic": "Nether",
+                  "theme": "nether",
+                  "search": "nether",
+                  "title": "The Nether Is Designed to Feel Completely Different",
+                  "hook": "Minecraft's Nether isn't simply another dimension with different colours.",
+                  "fact": (
+                      "The Nether changes several basic rules of exploration. Water "
+                      "cannot normally be placed as a regular source there, beds are "
+                      "dangerous to use, and the environment contains huge lava seas "
+                      "and dangerous terrain. Nether portals also provide a useful "
+                      "transport system because distances travelled in the Nether "
+                      "correspond to much larger distances in the Overworld. This means "
+                      "players can use carefully placed portals to create surprisingly "
+                      "fast long-distance travel routes."
+                  ),
+                  "visuals": ["nether", "lava", "portal"]
+              },
+
+              {
+                  "topic": "Ancient Cities",
+                  "theme": "deep_dark",
+                  "search": "ancient city",
+                  "title": "Ancient Cities Are Built Around Silence",
+                  "hook": "Minecraft has a structure where making too much noise can become the problem.",
+                  "fact": (
+                      "Ancient Cities generate deep underground in the Deep Dark and "
+                      "contain large ruined structures surrounded by sculk. Sculk "
+                      "sensors can detect vibrations and help activate nearby sculk "
+                      "shriekers. Repeated warnings can eventually cause a Warden to "
+                      "appear, turning careless exploration into a serious threat. "
+                      "This makes Ancient Cities unusual because success depends heavily "
+                      "on movement, timing and awareness rather than simply having "
+                      "strong armour and attacking everything nearby."
+                  ),
+                  "visuals": ["deep_dark", "sculk", "warden"]
+              },
+
+              {
+                  "topic": "Elytra",
+                  "theme": "elytra",
+                  "search": "elytra",
+                  "title": "The Elytra Completely Changes Minecraft Travel",
+                  "hook": "One item can turn Minecraft's entire world into a runway.",
+                  "fact": (
+                      "The Elytra allows players to glide through the air after jumping "
+                      "from a height, dramatically changing how players travel. "
+                      "Firework rockets can be used while gliding to provide additional "
+                      "forward movement, allowing experienced players to cross huge "
+                      "distances quickly. The item is found in End Cities, meaning "
+                      "players have to reach the End and explore beyond the main "
+                      "dragon island before they can obtain one naturally."
+                  ),
+                  "visuals": ["elytra", "sky", "end_city"]
+              },
+
+              {
+                  "topic": "Slimes",
+                  "theme": "slime",
+                  "search": "slime",
+                  "title": "Minecraft Slimes Don't Just Have One Size",
+                  "hook": "That giant slime isn't actually the end of the story.",
+                  "fact": (
+                      "When larger slimes are defeated, they can split into smaller "
+                      "slimes instead of simply disappearing. This creates a chain "
+                      "where a large slime can produce several smaller versions. "
+                      "The mechanic is especially useful for slime farms because "
+                      "players can repeatedly defeat the smaller slimes to collect "
+                      "slimeballs. Slimeballs are valuable for crafting sticky pistons "
+                      "and leads, so what looks like a simple bouncing enemy can become "
+                      "an important part of Minecraft engineering and farming."
+                  ),
+                  "visuals": ["slime", "split", "farm"]
+              },
+
+              {
+                  "topic": "Enchanting",
+                  "theme": "enchanting",
+                  "search": "enchanting",
+                  "title": "Minecraft's Enchanting System Has More Going On Than Levels",
+                  "hook": "That number beside your XP bar isn't the only thing affecting an enchantment.",
+                  "fact": (
+                      "Enchanting uses experience levels together with an enchanting "
+                      "table and nearby bookshelves to provide different enchantment "
+                      "options. The available choices are influenced by the setup "
+                      "around the table, meaning players can deliberately arrange "
+                      "bookshelves to access stronger enchantments. Enchantments can "
+                      "then be combined or transferred using tools such as anvils and "
+                      "enchanted books. This creates a progression system where players "
+                      "can gradually build extremely specialized equipment."
+                  ),
+                  "visuals": ["enchanting", "bookshelf", "xp"]
+              },
+
+              {
+                  "topic": "Minecraft World",
+                  "theme": "world",
+                  "search": "minecraft world",
+                  "title": "Minecraft Worlds Are Generated From Rules",
+                  "hook": "Every Minecraft world begins with a set of rules that determine what appears.",
+                  "fact": (
+                      "Minecraft uses a seed to determine the starting information "
+                      "used for world generation. Terrain, structures and many other "
+                      "features are produced from that world-generation system, which "
+                      "is why the same seed can recreate the same general world when "
+                      "used with the same relevant generation rules. The seed itself "
+                      "is not a saved copy of the entire world. Instead, it acts as "
+                      "an input that helps the game generate the world around the "
+                      "player."
+                  ),
+                  "visuals": ["world", "terrain", "seed"]
+              },
+
+              {
+                  "topic": "Beacon",
+                  "theme": "beacon",
+                  "search": "minecraft beacon",
+                  "title": "Beacons Turn Massive Builds Into Useful Machines",
+                  "hook": "That giant pyramid in your base can actually affect players around it.",
+                  "fact": (
+                      "A beacon can provide useful status effects to nearby players "
+                      "when it is powered by a pyramid made from certain mineral blocks. "
+                      "Larger pyramid structures unlock more beacon options and can "
+                      "increase the beacon's effective range. Because beacons require "
+                      "valuable resources and a substantial amount of building space, "
+                      "they often become late-game projects. Players commonly place "
+                      "them at large bases, mining areas and technical builds where "
+                      "their effects can be used repeatedly."
+                  ),
+                  "visuals": ["beacon", "pyramid", "beam"]
+              },
+
+              {
+                  "topic": "Copper",
+                  "theme": "copper",
+                  "search": "copper",
+                  "title": "Minecraft Copper Actually Changes Over Time",
+                  "hook": "Some Minecraft blocks can literally change appearance as they age.",
+                  "fact": (
+                      "Copper blocks gradually oxidize when exposed to the environment, "
+                      "changing through several visual stages as they age. Players can "
+                      "use this mechanic deliberately because different oxidation stages "
+                      "have different colours and appearances. Waxing copper prevents "
+                      "further oxidation, allowing a player to preserve a particular "
+                      "stage. This makes copper unusual among building materials because "
+                      "the appearance of a structure can depend not only on which block "
+                      "you place, but also on how long you leave it exposed."
+                  ),
+                  "visuals": ["copper", "oxidation", "building"]
+              },
+
+              {
+                  "topic": "Hoppers",
+                  "theme": "hopper",
+                  "search": "minecraft hopper",
+                  "title": "Hoppers Are One of Minecraft's Most Important Machines",
+                  "hook": "This ordinary-looking block is responsible for a huge amount of Minecraft automation.",
+                  "fact": (
+                      "Hoppers can move item stacks between containers and other "
+                      "inventory-related blocks, making them essential for automated "
+                      "storage and farming systems. They can collect items, transfer "
+                      "them between containers and work with other redstone components. "
+                      "Because hoppers can be connected into larger systems, players "
+                      "can build automatic item sorters, storage rooms, furnaces and "
+                      "farms. Many complicated Minecraft machines ultimately depend "
+                      "on simple item movement through hopper networks."
+                  ),
+                  "visuals": ["hopper", "storage", "items"]
+              },
+
+              {
+                  "topic": "Phantoms",
+                  "theme": "phantom",
+                  "search": "phantom",
+                  "title": "Phantoms Punish One Very Specific Habit",
+                  "hook": "Minecraft has a flying mob that appears because you've been awake too long.",
+                  "fact": (
+                      "Phantoms are hostile flying mobs associated with players who "
+                      "have not slept for several in-game days. They attack from above, "
+                      "which makes them particularly annoying when a player is building "
+                      "or travelling outdoors at night. Their behaviour gives sleeping "
+                      "a gameplay purpose beyond simply changing the time of day. "
+                      "Players who regularly sleep can avoid the problem, while players "
+                      "who deliberately stay awake can eventually find themselves "
+                      "dealing with repeated aerial attacks."
+                  ),
+                  "visuals": ["phantom", "night", "moon"]
+              },
+
+              {
+                  "topic": "Snow Golems",
+                  "theme": "snow_golem",
+                  "search": "snow golem",
+                  "title": "Snow Golems Are Basically Moving Defences",
+                  "hook": "You can build a Minecraft mob that automatically throws snowballs at enemies.",
+                  "fact": (
+                      "Snow Golems can be created by arranging snow blocks and placing "
+                      "a carved pumpkin on top. Once created, they behave as friendly "
+                      "mobs and can attack certain hostile creatures by throwing "
+                      "snowballs. Their attacks usually work more as distraction or "
+                      "knockback than as a powerful damage source. Snow Golems can "
+                      "therefore be used creatively in player-built defences, although "
+                      "their usefulness depends heavily on the environment and the "
+                      "enemies they are facing."
+                  ),
+                  "visuals": ["snow", "snow_golem", "defence"]
+              },
+
+              {
+                  "topic": "Mobs",
+                  "theme": "mobs",
+                  "search": "minecraft mobs",
+                  "title": "Minecraft's Mobs Follow Different Rules",
+                  "hook": "Not every Minecraft mob behaves according to the same rules.",
+                  "fact": (
+                      "Minecraft mobs are controlled by different behaviour systems "
+                      "depending on their type. Some hostile mobs actively search for "
+                      "players, some creatures flee from threats, and others have "
+                      "special movement or attack mechanics. This is why a Creeper, "
+                      "Enderman, Skeleton and Villager can react completely differently "
+                      "to the same situation. Understanding those behaviours is an "
+                      "important part of survival because players can often predict "
+                      "what a mob will do once they understand the rules controlling it."
+                  ),
+                  "visuals": ["mobs", "skeleton", "enderman"]
+              },
+
+              {
+                  "topic": "Villager Trading",
+                  "theme": "trading",
+                  "search": "villager trading",
+                  "title": "Villager Trading Can Become an Entire Economy",
+                  "hook": "A Minecraft village can be turned into a trading network.",
+                  "fact": (
+                      "Villager trades give players a renewable way to obtain many "
+                      "useful resources. Different professions offer different trade "
+                      "tables, and players can improve a villager's trading level by "
+                      "using its available trades. Carefully organized trading halls "
+                      "can therefore provide large quantities of items without relying "
+                      "entirely on random exploration. The system becomes especially "
+                      "powerful when players combine villagers with farms that produce "
+                      "the resources needed to trade for emeralds."
+                  ),
+                  "visuals": ["trading", "emerald", "village"]
+              },
+
+              {
+                  "topic": "Nether Fortress",
+                  "theme": "fortress",
+                  "search": "nether fortress",
+                  "title": "Nether Fortresses Are Important for More Than Loot",
+                  "hook": "This dangerous Nether structure can unlock some of Minecraft's biggest progression steps.",
+                  "fact": (
+                      "Nether Fortresses contain hostile mobs and valuable resources, "
+                      "but one of their most important roles is progression. Blazes "
+                      "found in fortresses can drop blaze rods, which are used to "
+                      "create blaze powder. Blaze powder is needed for important crafting "
+                      "and progression tasks, including brewing and preparing for the "
+                      "End. This makes finding a fortress a major milestone for players "
+                      "moving from basic survival toward the game's later progression."
+                  ),
+                  "visuals": ["fortress", "blaze", "nether"]
+              },
+
+              {
+                  "topic": "Furnaces",
+                  "theme": "furnace",
+                  "search": "minecraft furnace",
+                  "title": "Minecraft Furnaces Are More Efficient Than They Look",
+                  "hook": "One simple block is the beginning of Minecraft's entire processing system.",
+                  "fact": (
+                      "Furnaces convert certain input items into useful outputs while "
+                      "consuming fuel. They are used for everything from smelting ores "
+                      "to cooking food and processing building materials. Minecraft "
+                      "also includes specialized furnace blocks with different purposes, "
+                      "which means players can create larger processing setups when "
+                      "they need to handle many items. Once hoppers and storage are "
+                      "added, furnaces can become part of fully automated systems "
+                      "that process and sort items without constant player input."
+                  ),
+                  "visuals": ["furnace", "smelting", "items"]
+              },
+
+              {
+                  "topic": "End Cities",
+                  "theme": "end_city",
+                  "search": "end city",
+                  "title": "End Cities Hide Some of Minecraft's Most Valuable Gear",
+                  "hook": "The End has another challenge waiting after the dragon.",
+                  "fact": (
+                      "End Cities are large structures that generate in the outer End "
+                      "islands. They contain valuable loot and can include special "
+                      "structures called End Ships. End Ships are particularly important "
+                      "because they can contain an Elytra, giving players a way to glide "
+                      "through the world. Reaching these structures requires travelling "
+                      "beyond the main End island, so obtaining an Elytra represents "
+                      "another stage of progression after defeating the Ender Dragon."
+                  ),
+                  "visuals": ["end_city", "ship", "elytra"]
               }
+
           ]
 
 
-          # ============================================================
-          # UTILITIES
-          # ============================================================
+          # ------------------------------------------------------------
+          # Utility
+          # ------------------------------------------------------------
 
-          def run(cmd, quiet=False):
-              print("RUN:", " ".join(str(x) for x in cmd))
-
-              if quiet:
-                  subprocess.run(
-                      cmd,
-                      check=True,
-                      stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL
-                  )
-              else:
-                  subprocess.run(cmd, check=True)
-
-
-          def duration(path):
-              result = subprocess.run(
-                  [
-                      "ffprobe",
-                      "-v",
-                      "error",
-                      "-show_entries",
-                      "format=duration",
-                      "-of",
-                      "default=noprint_wrappers=1:nokey=1",
-                      str(path)
-                  ],
-                  capture_output=True,
+          def run(cmd, **kwargs):
+              print("$", " ".join(str(x) for x in cmd))
+              return subprocess.run(
+                  cmd,
+                  check=True,
                   text=True,
-                  check=True
+                  **kwargs
               )
 
-              return float(result.stdout.strip())
+
+          def run_capture(cmd):
+              return subprocess.check_output(
+                  cmd,
+                  text=True,
+                  stderr=subprocess.STDOUT
+              ).strip()
 
 
-          # ============================================================
-          # TEXT
-          # ============================================================
-
-          fact = random.choice(FACTS)
-
-          hooks = [
-              "Minecraft fact you probably didn't know.",
-              "Here's a Minecraft detail most players miss.",
-              "This Minecraft mechanic is seriously interesting.",
-              "You probably never noticed this in Minecraft.",
-              "Here's something Minecraft quietly does.",
-              "This Minecraft fact is easy to miss."
-          ]
-
-          endings = [
-              "Follow for more Minecraft facts.",
-              "Follow for more.",
-              "More Minecraft facts coming soon.",
-              "Follow for another one."
-          ]
-
-          hook = random.choice(hooks)
-          ending = random.choice(endings)
-
-          fact_text = fact["fact"]
-
-          # ============================================================
-          # PEXELS
-          # ============================================================
-
-          def search_pexels(query):
-              if not PEXELS_KEY:
-                  raise RuntimeError(
-                      "PEXELS_API_KEY is missing. "
-                      "Add it in GitHub Settings > Secrets and variables > Actions."
-                  )
-
-              response = requests.get(
-                  "https://api.pexels.com/v1/videos/search",
-                  headers={
-                      "Authorization": PEXELS_KEY
-                  },
-                  params={
-                      "query": query,
-                      "orientation": "portrait",
-                      "size": "medium",
-                      "per_page": 30
-                  },
-                  timeout=30
-              )
-
-              print("Pexels status:", response.status_code)
-
-              if response.status_code != 200:
-                  raise RuntimeError(
-                      f"Pexels API failed: {response.status_code} "
-                      f"{response.text[:500]}"
-                  )
-
-              data = response.json()
-
-              videos = data.get("videos", [])
-
-              if not videos:
-                  raise RuntimeError(
-                      f"Pexels returned no videos for '{query}'."
-                  )
-
-              return videos
-
-
-          def choose_video_file(video):
-              files = video.get("video_files", [])
-
-              usable = []
-
-              for item in files:
-                  link = item.get("link")
-                  width = item.get("width", 0)
-                  height = item.get("height", 0)
-
-                  if not link:
-                      continue
-
-                  if width < 300 or height < 300:
-                      continue
-
-                  usable.append(item)
-
-              if not usable:
-                  return None
-
-              portrait = [
-                  x for x in usable
-                  if x.get("height", 0) > x.get("width", 0)
-              ]
-
-              if portrait:
-                  usable = portrait
-
-              usable.sort(
-                  key=lambda x: abs(
-                      (x.get("width", 720) or 720) - 720
-                  )
-              )
-
-              return usable[0]
-
-
-          def download_video(video, number):
-              selected = choose_video_file(video)
-
-              if not selected:
-                  return None
-
-              link = selected["link"]
-
-              destination = DOWNLOADS / f"source_{number}.mp4"
-
-              print("Downloading:", link)
-
-              with requests.get(
-                  link,
-                  stream=True,
-                  timeout=120
-              ) as response:
-
-                  if response.status_code != 200:
-                      return None
-
-                  with open(destination, "wb") as f:
-                      for chunk in response.iter_content(
-                          chunk_size=1024 * 512
-                      ):
-                          if chunk:
-                              f.write(chunk)
-
-              if destination.stat().st_size < 100000:
-                  destination.unlink(missing_ok=True)
-                  return None
-
-              # Verify ffmpeg can actually read it.
-              try:
-                  d = duration(destination)
-
-                  if d <= 0.5:
-                      destination.unlink(missing_ok=True)
-                      return None
-
-              except Exception:
-                  destination.unlink(missing_ok=True)
-                  return None
-
-              return destination
-
-
-          def get_real_clips():
-              # Search the actual Minecraft-related concept first.
-              videos = search_pexels(fact["search"])
-
-              random.shuffle(videos)
-
-              clips = []
-
-              for number, video in enumerate(videos):
-                  downloaded = download_video(video, number)
-
-                  if downloaded:
-                      clips.append(downloaded)
-
-                  if len(clips) >= 4:
-                      break
-
-              if len(clips) < 4:
-                  raise RuntimeError(
-                      "Could not obtain four usable real video clips "
-                      "from Pexels. The workflow will NOT create a blank "
-                      "fallback video."
-                  )
-
-              return clips
-
-
-          # ============================================================
-          # VIDEO PROCESSING
-          # ============================================================
-
-          def make_segment(source, output, number):
-              # Every segment is exactly 5 seconds.
-              #
-              # - Loops a short source if necessary.
-              # - Fills the 720x1280 canvas.
-              # - Uses animated crop movement.
-              # - Adds subtle contrast/saturation.
-              #
-
-              if number == 0:
-                  x = "iw/2-(iw/zoom/2)"
-                  y = "ih/2-(ih/zoom/2)"
-              elif number == 1:
-                  x = "iw/2-(iw/zoom/2)+35*sin(t*0.7)"
-                  y = "ih/2-(ih/zoom/2)"
-              elif number == 2:
-                  x = "iw/2-(iw/zoom/2)-35*sin(t*0.6)"
-                  y = "ih/2-(ih/zoom/2)+25*cos(t*0.8)"
-              else:
-                  x = "iw/2-(iw/zoom/2)+25*cos(t*0.6)"
-                  y = "ih/2-(ih/zoom/2)-25*sin(t*0.5)"
-
-              vf = (
-                  "scale=720:1280:force_original_aspect_ratio=increase,"
-                  "crop=720:1280:"
-                  f"{x}:"
-                  f"{y},"
-                  "setsar=1,"
-                  "eq=contrast=1.08:saturation=1.12:brightness=0.01,"
-                  "vignette=PI/5,"
-                  "fps=30,"
-                  "format=yuv420p"
-              )
-
-              # Zoom is done using the scale before crop.
-              #
-              # The input is scaled to fill the portrait frame, then
-              # the animated crop provides camera movement.
-
+          def get_audio_duration(path):
               cmd = [
-                  "ffmpeg",
-                  "-y",
-                  "-stream_loop",
-                  "-1",
-                  "-i",
-                  str(source),
-                  "-t",
-                  "5",
-                  "-vf",
-                  vf,
-                  "-an",
-                  "-r",
-                  "30",
-                  "-c:v",
-                  "libx264",
-                  "-preset",
-                  "veryfast",
-                  "-crf",
-                  "20",
-                  "-pix_fmt",
-                  "yuv420p",
-                  str(output)
+                  "ffprobe",
+                  "-v", "error",
+                  "-show_entries", "format=duration",
+                  "-of", "default=noprint_wrappers=1:nokey=1",
+                  str(path)
               ]
 
-              run(cmd, quiet=True)
+              try:
+                  return float(run_capture(cmd))
+              except Exception:
+                  return 0.0
 
 
-          def join_segments(segments, output):
-              concat_file = SEGMENTS / "concat.txt"
+          # ------------------------------------------------------------
+          # Topic colours
+          # ------------------------------------------------------------
 
-              with open(concat_file, "w", encoding="utf-8") as f:
-                  for segment in segments:
-                      f.write(
-                          "file '"
-                          + str(segment.resolve()).replace("'", "'\\''")
-                          + "'\n"
+          THEMES = {
+              "creeper": ((28, 55, 34), (110, 210, 65)),
+              "redstone": ((35, 8, 10), (210, 35, 30)),
+              "dragon": ((18, 10, 35), (145, 65, 205)),
+              "piston": ((55, 48, 36), (180, 145, 80)),
+              "village": ((48, 30, 18), (205, 145, 60)),
+              "ocean": ((5, 35, 65), (35, 170, 210)),
+              "nether": ((55, 8, 8), (220, 55, 20)),
+              "deep_dark": ((8, 13, 20), (35, 125, 130)),
+              "elytra": ((10, 30, 50), (80, 180, 230)),
+              "slime": ((20, 55, 25), (80, 220, 90)),
+              "enchanting": ((28, 10, 55), (170, 80, 230)),
+              "world": ((20, 50, 25), (80, 180, 90)),
+              "beacon": ((10, 35, 45), (100, 240, 255)),
+              "copper": ((60, 28, 15), (70, 190, 170)),
+              "hopper": ((35, 35, 38), (150, 150, 160)),
+              "phantom": ((12, 18, 35), (80, 120, 210)),
+              "snow_golem": ((35, 60, 80), (220, 245, 255)),
+              "mobs": ((25, 20, 35), (150, 100, 190)),
+              "trading": ((30, 55, 30), (80, 200, 100)),
+              "fortress": ((55, 18, 10), (190, 65, 35)),
+              "furnace": ((38, 32, 30), (240, 115, 35)),
+              "end_city": ((18, 12, 45), (150, 95, 220))
+          }
+
+
+          def theme_for(fact):
+              return THEMES.get(
+                  fact["theme"],
+                  ((20, 25, 35), (100, 150, 220))
+              )
+
+
+          # ------------------------------------------------------------
+          # Minecraft-style drawing helpers
+          # ------------------------------------------------------------
+
+          def rect_block(draw, x, y, w, h, color, outline=None):
+              draw.rectangle(
+                  [int(x), int(y), int(x + w), int(y + h)],
+                  fill=color,
+                  outline=outline
+              )
+
+
+          def pixel_cube(draw, x, y, size, top, front, side):
+              x = int(x)
+              y = int(y)
+              s = int(size)
+
+              depth = max(4, s // 5)
+
+              draw.polygon(
+                  [
+                      (x, y),
+                      (x + s, y),
+                      (x + s - depth, y + depth),
+                      (x + depth, y + depth)
+                  ],
+                  fill=top
+              )
+
+              draw.polygon(
+                  [
+                      (x + depth, y + depth),
+                      (x + s - depth, y + depth),
+                      (x + s - depth, y + s),
+                      (x + depth, y + s)
+                  ],
+                  fill=front
+              )
+
+              draw.polygon(
+                  [
+                      (x + s - depth, y + depth),
+                      (x + s, y),
+                      (x + s, y + s - depth),
+                      (x + s - depth, y + s)
+                  ],
+                  fill=side
+              )
+
+
+          def draw_grid(draw, offset, color):
+              size = 54
+              horizon = 580
+
+              for y in range(horizon, HEIGHT + 100, size):
+                  yy = y + int(offset * 0.7) % size
+                  draw.line(
+                      [(0, yy), (WIDTH, yy)],
+                      fill=color,
+                      width=2
+                  )
+
+              for x in range(-WIDTH, WIDTH * 2, size):
+                  xx = x + int(offset) % size
+                  draw.line(
+                      [(WIDTH // 2, horizon), (xx, HEIGHT)],
+                      fill=color,
+                      width=2
+                  )
+
+
+          def draw_particles(draw, rng, count, t, c1, c2):
+              for i in range(count):
+                  x = rng.randrange(WIDTH)
+                  base_y = rng.randrange(80, HEIGHT)
+
+                  y = (
+                      base_y
+                      - int((t * (15 + i % 20)) % (HEIGHT + 100))
+                  )
+
+                  r = 2 + (i % 4)
+
+                  color = c1 if i % 2 == 0 else c2
+
+                  draw.rectangle(
+                      [x, y, x + r, y + r],
+                      fill=color
+                  )
+
+
+          # ------------------------------------------------------------
+          # Individual themed scenes
+          # ------------------------------------------------------------
+
+          def scene_creeper(draw, t, rng, c1, c2):
+              ground = 650
+
+              for x in range(0, WIDTH, 45):
+                  rect_block(
+                      draw,
+                      x,
+                      ground,
+                      45,
+                      90,
+                      (48, 105, 45)
+                  )
+
+              # Creeper moves towards camera.
+              scale = 1.0 + 0.15 * math.sin(t * 1.5)
+              size = int(210 * scale)
+
+              cx = WIDTH // 2
+              cy = 500
+
+              x = cx - size // 2
+              y = cy - size // 2
+
+              green = (55, 155, 65)
+              dark = (20, 45, 25)
+
+              rect_block(draw, x + size * .18, y, size * .64, size * .62, green)
+
+              # legs
+              rect_block(draw, x + size * .20, y + size * .55, size * .22, size * .45, green)
+              rect_block(draw, x + size * .58, y + size * .55, size * .22, size * .45, green)
+
+              # face
+              eye = int(size * .12)
+
+              rect_block(draw, x + size * .30, y + size * .22, eye, eye, dark)
+              rect_block(draw, x + size * .58, y + size * .22, eye, eye, dark)
+
+              rect_block(draw, x + size * .42, y + size * .35, eye, int(eye * 1.7), dark)
+              rect_block(draw, x + size * .30, y + size * .45, int(eye * 1.4), eye, dark)
+              rect_block(draw, x + size * .58, y + size * .45, int(eye * 1.4), eye, dark)
+
+              # charging/explosion warning
+              pulse = (math.sin(t * 7) + 1) / 2
+
+              if pulse > .72:
+                  glow = Image.new("RGBA", (WIDTH, HEIGHT), (255, 120, 40, 0))
+                  gd = ImageDraw.Draw(glow)
+
+                  for r in range(20, 220, 25):
+                      alpha = max(0, int(70 - r / 4))
+                      gd.ellipse(
+                          [
+                              cx - r,
+                              cy - r,
+                              cx + r,
+                              cy + r
+                          ],
+                          outline=(255, 190, 60, alpha),
+                          width=8
                       )
 
-              cmd = [
-                  "ffmpeg",
-                  "-y",
-                  "-f",
-                  "concat",
-                  "-safe",
-                  "0",
-                  "-i",
-                  str(concat_file),
-                  "-t",
-                  "20",
-                  "-an",
-                  "-c:v",
-                  "libx264",
-                  "-preset",
-                  "veryfast",
-                  "-crf",
-                  "19",
-                  "-pix_fmt",
-                  "yuv420p",
-                  "-movflags",
-                  "+faststart",
-                  str(output)
-              ]
+                  glow = glow.filter(ImageFilter.GaussianBlur(8))
+                  draw._image.alpha_composite(glow)
 
-              run(cmd, quiet=True)
 
-              d = duration(output)
+          def scene_redstone(draw, t, rng, c1, c2):
+              draw_grid(draw, t * 50, (60, 35, 35))
 
-              if d < 19.5 or d > 20.5:
-                  raise RuntimeError(
-                      f"Bad video duration: {d}"
+              # Circuit path
+              y = 520
+
+              for i in range(8):
+                  x = 20 + i * 70
+
+                  rect_block(
+                      draw,
+                      x,
+                      y,
+                      45,
+                      45,
+                      (70, 65, 65)
+                  )
+
+                  if i < 7:
+                      glow = 0.5 + 0.5 * math.sin(t * 8 - i)
+
+                      rect_block(
+                          draw,
+                          x + 42,
+                          y + 17,
+                          35,
+                          10,
+                          (
+                              220,
+                              int(30 + 70 * glow),
+                              int(25 + 25 * glow)
+                          )
+                      )
+
+              # Redstone pulse
+              px = 25 + int((t * 150) % 490)
+
+              draw.ellipse(
+                  [px - 14, y + 5, px + 14, y + 33],
+                  fill=(255, 70, 50)
+              )
+
+              # Piston-like machine
+              piston_x = 170 + int(math.sin(t * 3) * 35)
+
+              rect_block(
+                  draw,
+                  piston_x,
+                  350,
+                  170,
+                  80,
+                  (145, 135, 115)
+              )
+
+              rect_block(
+                  draw,
+                  piston_x + 65,
+                  430,
+                  40,
+                  130,
+                  (185, 165, 125)
+              )
+
+
+          def scene_dragon(draw, t, rng, c1, c2):
+              # End sky
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(10, 5, 25))
+
+              # stars
+              for i in range(80):
+                  x = (i * 97) % WIDTH
+                  y = (i * 53) % 550
+                  r = 1 + (i % 3)
+                  draw.ellipse([x, y, x + r, y + r], fill=(180, 150, 230))
+
+              # obsidian pillars
+              for x in [55, 185, 355, 465]:
+                  h = 180 + int(40 * math.sin(t + x))
+                  rect_block(
+                      draw,
+                      x,
+                      650 - h,
+                      55,
+                      h,
+                      (25, 22, 30)
+                  )
+
+                  draw.rectangle(
+                      [x - 4, 650 - h - 7, x + 59, 650 - h],
+                      fill=(50, 45, 65)
+                  )
+
+              # crystal
+              cx = WIDTH // 2
+              cy = 350 + int(math.sin(t * 2) * 20)
+
+              draw.polygon(
+                  [
+                      (cx, cy - 80),
+                      (cx + 30, cy),
+                      (cx, cy + 80),
+                      (cx - 30, cy)
+                  ],
+                  fill=(235, 120, 255)
+              )
+
+              # dragon silhouette
+              dx = cx + int(math.sin(t * 1.1) * 120)
+              dy = 270 + int(math.sin(t * 2) * 40)
+
+              draw.ellipse(
+                  [dx - 70, dy - 35, dx + 70, dy + 35],
+                  fill=(35, 20, 45)
+              )
+
+              draw.polygon(
+                  [
+                      (dx - 30, dy),
+                      (dx - 180, dy - 100),
+                      (dx - 80, dy + 15)
+                  ],
+                  fill=(28, 17, 40)
+              )
+
+              draw.polygon(
+                  [
+                      (dx + 30, dy),
+                      (dx + 180, dy - 100),
+                      (dx + 80, dy + 15)
+                  ],
+                  fill=(28, 17, 40)
+              )
+
+
+          def scene_piston(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(35, 28, 20))
+
+              extension = 60 + int((math.sin(t * 3) + 1) * 40)
+
+              # piston
+              rect_block(
+                  draw,
+                  80,
+                  500,
+                  120,
+                  120,
+                  (155, 145, 125)
+              )
+
+              rect_block(
+                  draw,
+                  200,
+                  535,
+                  extension,
+                  50,
+                  (190, 170, 130)
+              )
+
+              pixel_cube(
+                  draw,
+                  200 + extension,
+                  490,
+                  100,
+                  (125, 90, 60),
+                  (100, 70, 45),
+                  (80, 55, 35)
+              )
+
+              # door
+              door_x = 370
+
+              rect_block(
+                  draw,
+                  door_x,
+                  390,
+                  100,
+                  250,
+                  (70, 50, 35)
+              )
+
+              opening = int((math.sin(t * 2) + 1) * 45)
+
+              rect_block(
+                  draw,
+                  door_x + opening,
+                  430,
+                  55,
+                  170,
+                  (135, 110, 75)
+              )
+
+
+          def scene_village(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(110, 175, 225))
+
+              # sun
+              draw.ellipse([380, 80, 470, 170], fill=(255, 230, 100))
+
+              # ground
+              rect_block(draw, 0, 600, WIDTH, 360, (70, 135, 60))
+
+              # houses
+              for hx in [40, 300]:
+                  rect_block(
+                      draw,
+                      hx,
+                      470,
+                      190,
+                      140,
+                      (160, 115, 70)
+                  )
+
+                  draw.polygon(
+                      [
+                          (hx - 15, 470),
+                          (hx + 95, 390),
+                          (hx + 205, 470)
+                      ],
+                      fill=(115, 55, 40)
+                  )
+
+                  rect_block(
+                      draw,
+                      hx + 75,
+                      535,
+                      40,
+                      75,
+                      (80, 50, 30)
+                  )
+
+              # villager walking
+              vx = 50 + int((t * 90) % 390)
+
+              rect_block(draw, vx, 545, 50, 75, (100, 70, 45))
+              draw.ellipse([vx + 8, 505, vx + 42, 540], fill=(160, 115, 80))
+
+              # nose
+              rect_block(draw, vx + 37, 520, 12, 10, (125, 80, 55))
+
+
+          def scene_ocean(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(10, 85, 135))
+
+              # underwater light
+              for i in range(10):
+                  x = 30 + i * 65
+                  draw.polygon(
+                      [
+                          (x, 0),
+                          (x + 40, 0),
+                          (x + 90, 600),
+                          (x + 40, 600)
+                      ],
+                      fill=(25, 120, 165)
+                  )
+
+              # monument
+              for row in range(4):
+                  for col in range(4):
+                      x = 80 + col * 95
+                      y = 430 + row * 55
+
+                      pixel_cube(
+                          draw,
+                          x,
+                          y,
+                          90,
+                          (80, 170, 165),
+                          (45, 120, 125),
+                          (30, 90, 105)
+                      )
+
+              # bubbles
+              for i in range(25):
+                  x = (i * 71 + int(t * 30)) % WIDTH
+                  y = HEIGHT - ((i * 43 + int(t * 90)) % 650)
+
+                  draw.ellipse(
+                      [x, y, x + 7, y + 7],
+                      outline=(160, 230, 255),
+                      width=2
                   )
 
 
-          # ============================================================
-          # NEURAL VOICE
-          # ============================================================
+          def scene_nether(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(65, 8, 8))
 
-          def make_voice_part(text, filename):
-              output = OUT / filename
+              # lava background
+              for y in range(500, HEIGHT, 45):
+                  wave = int(math.sin(t * 3 + y / 30) * 20)
+
+                  draw.rectangle(
+                      [0, y, WIDTH, y + 35],
+                      fill=(170, 45 + (y % 80), 10)
+                  )
+
+                  draw.line(
+                      [(0, y + wave), (WIDTH, y - wave)],
+                      fill=(255, 110, 25),
+                      width=5
+                  )
+
+              # basalt/nether blocks
+              for i in range(9):
+                  x = (i * 73) % WIDTH
+                  h = 100 + (i % 4) * 60
+
+                  rect_block(
+                      draw,
+                      x,
+                      500 - h,
+                      60,
+                      h,
+                      (45, 35, 38)
+                  )
+
+              # portal
+              px = 180
+              py = 240
+
+              draw.rectangle(
+                  [px, py, px + 180, py + 300],
+                  outline=(40, 20, 55),
+                  width=30
+              )
+
+              for r in range(80, 10, -12):
+                  draw.rectangle(
+                      [
+                          px + r,
+                          py + r,
+                          px + 180 - r,
+                          py + 300 - r
+                      ],
+                      outline=(80, 20, 130),
+                      width=8
+                  )
+
+
+          def scene_deep_dark(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(6, 10, 18))
+
+              # sculk floor
+              for i in range(25):
+                  x = (i * 47) % WIDTH
+                  y = 650 + (i % 5) * 45
+
+                  rect_block(
+                      draw,
+                      x,
+                      y,
+                      70,
+                      45,
+                      (12, 60 + (i % 3) * 15, 70)
+                  )
+
+              # Ancient City arches
+              for x in [60, 330]:
+                  rect_block(
+                      draw,
+                      x,
+                      360,
+                      70,
+                      330,
+                      (28, 30, 38)
+                  )
+
+                  rect_block(
+                      draw,
+                      x + 120,
+                      360,
+                      70,
+                      330,
+                      (28, 30, 38)
+                  )
+
+                  draw.arc(
+                      [x + 35, 280, x + 155, 460],
+                      180,
+                      360,
+                      fill=(40, 42, 52),
+                      width=20
+                  )
+
+              # vibration waves
+              cx = WIDTH // 2
+              cy = 620
+
+              for r in range(30, 220, 35):
+                  rr = r + int(t * 35) % 35
+
+                  draw.ellipse(
+                      [cx - rr, cy - rr, cx + rr, cy + rr],
+                      outline=(35, 150, 160),
+                      width=3
+                  )
+
+              # Warden eyes
+              if math.sin(t * 2) > 0.2:
+                  draw.rectangle(
+                      [cx - 55, 480, cx - 20, 500],
+                      fill=(20, 180, 180)
+                  )
+                  draw.rectangle(
+                      [cx + 20, 480, cx + 55, 500],
+                      fill=(20, 180, 180)
+                  )
+
+
+          def scene_elytra(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(15, 55, 100))
+
+              # clouds
+              for i in range(7):
+                  x = (i * 120 + int(t * 50)) % (WIDTH + 150) - 75
+                  y = 120 + (i % 3) * 110
+
+                  draw.ellipse(
+                      [x, y, x + 100, y + 45],
+                      fill=(225, 240, 250)
+                  )
+
+              # player gliding
+              cx = WIDTH // 2 + int(math.sin(t * 1.2) * 90)
+              cy = 470 + int(math.sin(t * 2) * 60)
+
+              draw.ellipse(
+                  [cx - 25, cy - 45, cx + 25, cy + 5],
+                  fill=(180, 145, 100)
+              )
+
+              draw.polygon(
+                  [
+                      (cx - 15, cy),
+                      (cx - 170, cy - 70),
+                      (cx - 70, cy + 30),
+                      (cx + 70, cy + 30),
+                      (cx + 170, cy - 70),
+                      (cx + 15, cy)
+                  ],
+                  fill=(100, 110, 125)
+              )
+
+              # rocket trail
+              for i in range(12):
+                  x = cx + (i - 6) * 20
+                  y = cy + 70 + i * 14
+
+                  draw.rectangle(
+                      [x, y, x + 8, y + 18],
+                      fill=(255, 150 + i * 5, 40)
+                  )
+
+
+          def scene_slime(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=(18, 55, 25))
+
+              # giant slime
+              bounce = abs(math.sin(t * 2))
+              size = int(230 + bounce * 35)
+
+              x = WIDTH // 2 - size // 2
+              y = 390 - int(bounce * 50)
+
+              draw.rounded_rectangle(
+                  [x, y, x + size, y + size],
+                  radius=25,
+                  fill=(75, 205, 85)
+              )
+
+              eye = 30
+
+              draw.rectangle(
+                  [x + 55, y + 70, x + 55 + eye, y + 70 + eye],
+                  fill=(20, 50, 25)
+              )
+
+              draw.rectangle(
+                  [x + size - 85, y + 70, x + size - 55, y + 100],
+                  fill=(20, 50, 25)
+              )
+
+              # small slimes
+              for i in range(5):
+                  sx = 30 + i * 100
+                  sy = 700 - int(abs(math.sin(t * 3 + i)) * 40)
+
+                  draw.rounded_rectangle(
+                      [sx, sy, sx + 65, sy + 65],
+                      radius=12,
+                      fill=(80, 220, 90)
+                  )
+
+
+          def scene_generic(draw, t, rng, c1, c2):
+              draw.rectangle([0, 0, WIDTH, HEIGHT], fill=c1)
+
+              draw_grid(
+                  draw,
+                  t * 35,
+                  tuple(min(255, int(x * 1.5)) for x in c2)
+              )
+
+              draw_particles(
+                  draw,
+                  rng,
+                  30,
+                  t,
+                  c1,
+                  c2
+              )
+
+              # floating blocks
+              for i in range(8):
+                  x = (i * 85 + int(math.sin(t + i) * 30)) % WIDTH
+                  y = 180 + (i % 4) * 150
+
+                  pixel_cube(
+                      draw,
+                      x,
+                      y,
+                      70,
+                      c2,
+                      tuple(max(0, x - 40) for x in c2),
+                      tuple(max(0, x - 65) for x in c2)
+                  )
+
+
+          SCENE_FUNCTIONS = {
+              "creeper": scene_creeper,
+              "redstone": scene_redstone,
+              "dragon": scene_dragon,
+              "piston": scene_piston,
+              "village": scene_village,
+              "ocean": scene_ocean,
+              "nether": scene_nether,
+              "deep_dark": scene_deep_dark,
+              "elytra": scene_elytra,
+              "slime": scene_slime
+          }
+
+
+          # ------------------------------------------------------------
+          # Frame rendering
+          # ------------------------------------------------------------
+
+          def render_frame(theme, scene_index, local_t, global_t, rng):
+              c1, c2 = theme_for(
+                  {
+                      "theme": theme
+                  }
+              )
+
+              img = Image.new(
+                  "RGBA",
+                  (WIDTH, HEIGHT),
+                  c1 + (255,)
+              )
+
+              draw = ImageDraw.Draw(img)
+
+              funcs = SCENE_FUNCTIONS.get(theme)
+
+              if funcs:
+                  funcs(draw, local_t, rng, c1, c2)
+              else:
+                  scene_generic(draw, global_t, rng, c1, c2)
+
+              # particles
+              draw_particles(
+                  draw,
+                  rng,
+                  20,
+                  global_t,
+                  c1,
+                  c2
+              )
+
+              return img.convert("RGB")
+
+
+          # ------------------------------------------------------------
+          # Piper
+          # ------------------------------------------------------------
+
+          def make_voice(text, output):
+              output = Path(output)
+
+              if output.exists():
+                  output.unlink()
+
+              model = VOICES / "en_US-ryan-high.onnx"
+
+              if not model.exists():
+                  # Fallback if Piper placed it elsewhere.
+                  candidates = list(VOICES.rglob("en_US-ryan-high.onnx"))
+
+                  if candidates:
+                      model = candidates[0]
+
+              if not model.exists():
+                  raise RuntimeError(
+                      "Piper voice model was not downloaded correctly."
+                  )
 
               cmd = [
-                  "python",
+                  sys.executable,
                   "-m",
                   "piper",
-                  "--data-dir",
-                  str(VOICE_DIR),
                   "-m",
-                  "en_GB-alan-medium",
+                  "en_US-ryan-high",
+                  "--data-dir",
+                  str(VOICES),
                   "-f",
                   str(output),
                   "--",
                   text
               ]
 
-              run(cmd, quiet=True)
+              run(cmd)
 
               if not output.exists():
                   raise RuntimeError(
-                      f"Piper failed to create {output}"
+                      f"Piper did not create {output}"
                   )
 
-              if duration(output) <= 0.1:
+              duration = get_audio_duration(output)
+
+              if duration <= 0:
                   raise RuntimeError(
-                      f"Piper produced empty audio: {output}"
+                      f"Generated voice file has no readable duration: {output}"
                   )
 
-              return output
+              return duration
 
 
-          # ============================================================
-          # CAPTIONS
-          # ============================================================
+          # ------------------------------------------------------------
+          # Audio
+          # ------------------------------------------------------------
+
+          def make_music(duration, output):
+              sample_rate = 44100
+              count = int(duration * sample_rate)
+
+              t = np.arange(count) / sample_rate
+
+              # Cinematic layered drone.
+              bass = (
+                  0.10 * np.sin(2 * np.pi * 55 * t)
+                  + 0.06 * np.sin(2 * np.pi * 82.4 * t)
+              )
+
+              pad = (
+                  0.025 * np.sin(2 * np.pi * 110 * t)
+                  + 0.018 * np.sin(2 * np.pi * 164.8 * t)
+              )
+
+              pulse = (
+                  0.025
+                  * np.sin(2 * np.pi * 2.0 * t)
+              )
+
+              # Gentle fade.
+              fade = np.ones_like(t)
+
+              fade_len = min(
+                  sample_rate * 1.5,
+                  len(t) // 2
+              )
+
+              fade[:fade_len] = np.linspace(
+                  0,
+                  1,
+                  fade_len
+              )
+
+              fade[-fade_len:] = np.linspace(
+                  1,
+                  0,
+                  fade_len
+              )
+
+              audio = (bass + pad + pulse) * fade
+
+              audio = np.clip(
+                  audio,
+                  -0.25,
+                  0.25
+              )
+
+              pcm = (
+                  audio * 32767
+              ).astype(np.int16)
+
+              with wave.open(str(output), "wb") as wf:
+                  wf.setnchannels(1)
+                  wf.setsampwidth(2)
+                  wf.setframerate(sample_rate)
+                  wf.writeframes(pcm.tobytes())
+
+
+          # ------------------------------------------------------------
+          # Subtitle generation
+          #
+          # Each spoken section gets its real measured duration.
+          # This is much safer than guessing one timing across the
+          # entire narration.
+          # ------------------------------------------------------------
 
           def ass_time(seconds):
-              hours = int(seconds // 3600)
-              minutes = int((seconds % 3600) // 60)
-              seconds = seconds % 60
+              cs = int(round(seconds * 100))
+              h = cs // 360000
+              cs %= 360000
+              m = cs // 6000
+              cs %= 6000
+              s = cs // 100
+              centi = cs % 100
 
-              return (
-                  f"{hours}:"
-                  f"{minutes:02d}:"
-                  f"{seconds:05.2f}"
-              )
-
-
-          def escape_ass(text):
-              return (
-                  text
-                  .replace("\\", "")
-                  .replace("{", "")
-                  .replace("}", "")
-                  .replace("\n", " ")
-              )
+              return f"{h}:{m:02d}:{s:02d}.{centi:02d}"
 
 
-          def create_captions(parts, output):
+          def split_caption(text, max_chars=34):
+              words = text.split()
+
               lines = []
+              current = ""
 
-              # Start each caption exactly when its corresponding
-              # Piper audio begins.
+              for word in words:
+                  candidate = (
+                      word
+                      if not current
+                      else current + " " + word
+                  )
+
+                  if len(candidate) <= max_chars:
+                      current = candidate
+                  else:
+                      if current:
+                          lines.append(current)
+
+                      current = word
+
+              if current:
+                  lines.append(current)
+
+              # Keep it readable.
+              if len(lines) <= 2:
+                  return "\\N".join(lines)
+
+              midpoint = len(lines) // 2
+
+              return (
+                  " ".join(lines[:midpoint])
+                  + "\\N"
+                  + " ".join(lines[midpoint:])
+              )
+
+
+          def create_ass(sections, output):
+              lines = [
+                  "[Script Info]",
+                  "ScriptType: v4.00+",
+                  "PlayResX: 540",
+                  "PlayResY: 960",
+                  "",
+                  "[V4+ Styles]",
+                  (
+                      "Style: Default,"
+                      "DejaVu Sans,"
+                      "34,"
+                      "&H00FFFFFF,"
+                      "&H00000000,"
+                      "&H80000000,"
+                      "&H00000000,"
+                      "0,"
+                      "0,"
+                      "0,"
+                      "0,"
+                      "100,"
+                      "100,"
+                      "0,"
+                      "0,"
+                      "1,"
+                      "3,"
+                      "2,"
+                      "5,"
+                      "25,"
+                      "25,"
+                      "60,"
+                      "25"
+                  ),
+                  "",
+                  "[Events]",
+                  "Format: Layer, Start, End, Style, Text"
+              ]
+
               current = 0.0
 
-              for text, audio in parts:
-                  d = duration(audio)
+              for text, duration in sections:
+                  start = current
+                  end = current + duration
 
-                  words = text.split()
+                  caption = split_caption(text)
 
-                  if not words:
-                      current += d
-                      continue
+                  lines.append(
+                      "Dialogue: 0,"
+                      f"{ass_time(start)},"
+                      f"{ass_time(end)},"
+                      f"Default,"
+                      f"{caption}"
+                  )
 
-                  # Break into small groups.
-                  group_size = 4
+                  current = end
 
-                  for index in range(0, len(words), group_size):
-                      group = words[index:index + group_size]
-
-                      start = current + (
-                          d * index / len(words)
-                      )
-
-                      end = current + (
-                          d * min(
-                              index + len(group),
-                              len(words)
-                          ) / len(words)
-                      )
-
-                      caption = escape_ass(
-                          " ".join(group)
-                      )
-
-                      lines.append(
-                          "Dialogue: 0,"
-                          f"{ass_time(start)},"
-                          f"{ass_time(end)},"
-                          "Caption,,0,0,0,,"
-                          "{\\fad(80,80)"
-                          "\\t(0,100,\\fscx108\\fscy108)}"
-                          + caption
-                      )
-
-                  current += d
-
-              ass = f"""[Script Info]
-          ScriptType: v4.00+
-          PlayResX: 720
-          PlayResY: 1280
-
-          [V4+ Styles]
-          Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-          Style: Caption,DejaVu Sans,43,&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,1,0,0,0,100,100,0,0,1,4,2,2,42,42,220,1
-
-          [Events]
-          Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-          {chr(10).join(lines)}
-          """
-
-              output.write_text(
-                  ass,
+              Path(output).write_text(
+                  "\n".join(lines),
                   encoding="utf-8"
               )
 
 
-          # ============================================================
-          # MUSIC
-          # ============================================================
+          # ------------------------------------------------------------
+          # Render video directly into FFmpeg.
+          #
+          # This avoids thousands of PNG files and prevents the old
+          # blank-screen/looping problem.
+          # ------------------------------------------------------------
 
-          def create_music(output):
+          def render_video(theme, durations, output):
+              total = sum(durations)
+
               cmd = [
                   "ffmpeg",
                   "-y",
                   "-f",
-                  "lavfi",
+                  "rawvideo",
+                  "-pix_fmt",
+                  "rgb24",
+                  "-s",
+                  f"{WIDTH}x{HEIGHT}",
+                  "-r",
+                  str(FPS),
                   "-i",
-                  (
-                      "aevalsrc="
-                      "0.055*sin(2*PI*55*t)"
-                      "+0.025*sin(2*PI*82.41*t)"
-                      "+0.020*sin(2*PI*110*t)"
-                      "+0.012*sin(2*PI*164.81*t)"
-                      ":s=44100"
-                  ),
-                  "-t",
-                  "20",
-                  "-af",
-                  (
-                      "afade=t=in:st=0:d=1.5,"
-                      "afade=t=out:st=17.5:d=2.5,"
-                      "lowpass=f=1800,"
-                      "acompressor=threshold=-20dB:ratio=3:attack=10:release=120"
-                  ),
-                  "-ar",
-                  "44100",
-                  "-ac",
-                  "2",
-                  str(output)
-              ]
-
-              run(cmd, quiet=True)
-
-
-          # ============================================================
-          # FINAL VIDEO
-          # ============================================================
-
-          def add_overlay(video, captions, output):
-              filtergraph = (
-                  "drawbox="
-                  "x=25:y=42:w=670:h=82:"
-                  "color=black@0.55:t=fill,"
-                  "drawtext="
-                  "fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
-                  "text='BLOCK FUEL':"
-                  "fontcolor=white:"
-                  "fontsize=32:"
-                  "x=(w-text_w)/2:"
-                  "y=65:"
-                  "enable='between(t,0,2.5)',"
-                  "ass="
-                  + str(captions)
-              )
-
-              cmd = [
-                  "ffmpeg",
-                  "-y",
-                  "-i",
-                  str(video),
-                  "-vf",
-                  filtergraph,
+                  "-",
                   "-an",
                   "-c:v",
                   "libx264",
                   "-preset",
                   "veryfast",
                   "-crf",
-                  "19",
+                  "21",
                   "-pix_fmt",
                   "yuv420p",
                   "-movflags",
                   "+faststart",
+                  "-t",
+                  f"{total:.3f}",
                   str(output)
               ]
 
-              run(cmd, quiet=True)
+              process = subprocess.Popen(
+                  cmd,
+                  stdin=subprocess.PIPE
+              )
 
+              rng = random.Random(
+                  int.from_bytes(
+                      os.urandom(8),
+                      "little"
+                  )
+              )
 
-          def combine_audio(video, audio_parts, music, output):
-              # Concatenate the three voice sections.
-              voice_concat = OUT / "voice_concat.txt"
-              voice_full = OUT / "voice_full.wav"
+              elapsed = 0.0
 
-              with open(voice_concat, "w", encoding="utf-8") as f:
-                  for audio in audio_parts:
-                      f.write(
-                          "file '"
-                          + str(audio.resolve()).replace(
-                              "'",
-                              "'\\''"
+              try:
+                  for scene_index, duration in enumerate(durations):
+
+                      scene_start = elapsed
+
+                      frames = max(
+                          1,
+                          int(round(duration * FPS))
+                      )
+
+                      for frame in range(frames):
+                          local_t = frame / FPS
+                          global_t = scene_start + local_t
+
+                          image = render_frame(
+                              theme,
+                              scene_index,
+                              local_t,
+                              global_t,
+                              rng
                           )
-                          + "'\n"
+
+                          process.stdin.write(
+                              image.tobytes()
+                          )
+
+                      elapsed += duration
+
+                  process.stdin.close()
+
+                  code = process.wait()
+
+                  if code != 0:
+                      raise RuntimeError(
+                          f"FFmpeg video encoding failed with code {code}"
+                      )
+
+              except Exception:
+                  try:
+                      process.stdin.close()
+                  except Exception:
+                      pass
+
+                  process.kill()
+                  process.wait()
+
+                  raise
+
+
+          # ------------------------------------------------------------
+          # Topic-specific scene plans
+          # ------------------------------------------------------------
+
+          SCENE_PLANS = {
+              "creeper": [5.5, 5.5, 5.5, 5.5],
+              "redstone": [5.5, 5.5, 5.5, 5.5],
+              "dragon": [5.5, 5.5, 5.5, 5.5],
+              "piston": [5.5, 5.5, 5.5, 5.5],
+              "village": [5.5, 5.5, 5.5, 5.5],
+              "ocean": [5.5, 5.5, 5.5, 5.5],
+              "nether": [5.5, 5.5, 5.5, 5.5],
+              "deep_dark": [5.5, 5.5, 5.5, 5.5],
+              "elytra": [5.5, 5.5, 5.5, 5.5],
+              "slime": [5.5, 5.5, 5.5, 5.5]
+          }
+
+
+          def make_generic_scene_theme(theme):
+              # Themes without dedicated drawing functions still receive
+              # multiple different generated compositions.
+              return theme
+
+
+          # ------------------------------------------------------------
+          # Build narration
+          # ------------------------------------------------------------
+
+          def build_narration(fact):
+              hook = fact["hook"]
+
+              paragraphs = [
+                  s.strip()
+                  for s in fact["fact"].split(".")
+                  if s.strip()
+              ]
+
+              # Convert the detailed fact into natural spoken sentences.
+              sentences = [
+                  hook
+              ]
+
+              for paragraph in paragraphs:
+                  sentences.append(
+                      paragraph + "."
+                  )
+
+              sentences.append(
+                  "And that's what makes Minecraft so interesting."
+              )
+
+              return sentences
+
+
+          def generate_audio_sections(sentences):
+              audio_files = []
+              durations = []
+
+              for i, sentence in enumerate(sentences):
+                  path = TEMP / f"voice_{i:02d}.wav"
+
+                  duration = make_voice(
+                      sentence,
+                      path
+                  )
+
+                  audio_files.append(path)
+                  durations.append(duration)
+
+              return audio_files, durations
+
+
+          def combine_audio(files, output):
+              concat_file = TEMP / "audio_concat.txt"
+
+              with concat_file.open("w", encoding="utf-8") as f:
+                  for path in files:
+                      f.write(
+                          f"file '{path.resolve()}'\n"
                       )
 
               run([
@@ -1088,231 +1768,239 @@ jobs:
                   "-safe",
                   "0",
                   "-i",
-                  str(voice_concat),
+                  str(concat_file),
                   "-c:a",
                   "pcm_s16le",
-                  str(voice_full)
-              ], quiet=True)
+                  str(output)
+              ])
 
-              # Voice is kept loud.
-              # Music sits underneath it.
-              cmd = [
+
+          # ------------------------------------------------------------
+          # Final composition
+          # ------------------------------------------------------------
+
+          def compose_video(
+              video,
+              voice,
+              music,
+              subtitles,
+              output,
+              total_duration
+          ):
+              # Slight music ducking.
+              filter_complex = (
+                  "[1:a]volume=1.0[voice];"
+                  "[2:a]volume=0.16[music];"
+                  "[voice][music]"
+                  "amix=inputs=2:"
+                  "duration=first:"
+                  "dropout_transition=2"
+                  "[mixed]"
+              )
+
+              run([
                   "ffmpeg",
                   "-y",
                   "-i",
                   str(video),
                   "-i",
-                  str(voice_full),
+                  str(voice),
                   "-i",
                   str(music),
                   "-filter_complex",
-                  (
-                      "[1:a]"
-                      "loudnorm=I=-16:TP=-1.5:LRA=11,"
-                      "acompressor=threshold=-18dB:ratio=3:attack=5:release=80,"
-                      "volume=1.10"
-                      "[voice];"
-                      "[2:a]"
-                      "volume=0.16"
-                      "[music];"
-                      "[voice][music]"
-                      "amix=inputs=2:duration=first:"
-                      "dropout_transition=2,"
-                      "loudnorm=I=-14:TP=-1.5:LRA=11"
-                      "[audio]"
-                  ),
+                  filter_complex,
                   "-map",
                   "0:v",
                   "-map",
-                  "[audio]",
-                  "-t",
-                  "20",
+                  "[mixed]",
+                  "-vf",
+                  f"subtitles={subtitles}:fontsdir=/usr/share/fonts/truetype/dejavu",
                   "-c:v",
-                  "copy",
+                  "libx264",
+                  "-preset",
+                  "medium",
+                  "-crf",
+                  "20",
+                  "-pix_fmt",
+                  "yuv420p",
                   "-c:a",
                   "aac",
                   "-b:a",
                   "192k",
+                  "-t",
+                  f"{total_duration:.3f}",
                   "-movflags",
                   "+faststart",
                   str(output)
-              ]
-
-              run(cmd, quiet=True)
+              ])
 
 
-          # ============================================================
-          # MAIN
-          # ============================================================
+          # ------------------------------------------------------------
+          # Validation
+          # ------------------------------------------------------------
 
-          def main():
-
-              print("=" * 70)
-              print("BLOCK FUEL GENERATOR")
-              print("=" * 70)
-
-              print("FACT:")
-              print(fact_text)
-
-              print()
-              print("SEARCH:")
-              print(fact["search"])
-
-              print()
-              print("VOICE:")
-              print(hook)
-              print(fact_text)
-              print(ending)
-
-              # --------------------------------------------------------
-              # Require real footage.
-              # --------------------------------------------------------
-
-              clips = get_real_clips()
-
-              print()
-              print("REAL CLIPS:")
-              for clip in clips:
-                  print(clip)
-
-              # --------------------------------------------------------
-              # Create four completely separate shots.
-              # --------------------------------------------------------
-
-              segments = []
-
-              for i, clip in enumerate(clips):
-                  segment = SEGMENTS / f"shot_{i}.mp4"
-
-                  make_segment(
-                      clip,
-                      segment,
-                      i
+          def validate_video(path):
+              if not path.exists():
+                  raise RuntimeError(
+                      "Final MP4 was not created."
                   )
 
-                  segments.append(segment)
+              size = path.stat().st_size
 
-              raw_video = OUT / "raw_video.mp4"
+              if size < 100_000:
+                  raise RuntimeError(
+                      f"Final MP4 is suspiciously small: {size} bytes"
+                  )
 
-              join_segments(
-                  segments,
+              duration = get_audio_duration(path)
+
+              if duration < 15:
+                  raise RuntimeError(
+                      f"Final video is too short: {duration:.2f}s"
+                  )
+
+              # Check video stream.
+              info = run_capture([
+                  "ffprobe",
+                  "-v",
+                  "error",
+                  "-select_streams",
+                  "v:0",
+                  "-show_entries",
+                  "stream=width,height,codec_name",
+                  "-of",
+                  "csv=p=0",
+                  str(path)
+              ])
+
+              print("VIDEO STREAM:", info)
+
+              if "540,960" not in info:
+                  print(
+                      "Warning: video dimensions are not exactly "
+                      "540x960, but the file is still usable."
+                  )
+
+              print(
+                  f"Final video duration: {duration:.2f}s"
+              )
+
+
+          # ------------------------------------------------------------
+          # Main
+          # ------------------------------------------------------------
+
+          def main():
+              print("=" * 60)
+              print("BLOCK FUEL GENERATOR")
+              print("=" * 60)
+
+              # Pick a fact.
+              fact = random.choice(FACTS)
+
+              print()
+              print("TOPIC:", fact["topic"])
+              print("TITLE:", fact["title"])
+              print()
+
+              sentences = build_narration(fact)
+
+              print("NARRATION:")
+              for sentence in sentences:
+                  print("-", sentence)
+
+              # Generate voice one sentence at a time.
+              audio_files, audio_durations = generate_audio_sections(
+                  sentences
+              )
+
+              print()
+              print("AUDIO DURATIONS:")
+              for i, duration in enumerate(audio_durations):
+                  print(i, f"{duration:.2f}s")
+
+              narration_duration = sum(audio_durations)
+
+              # We want enough visual time for the narration.
+              #
+              # The scene durations are scaled so all visuals cover
+              # the complete narration without looping.
+              base_scene_count = 4
+
+              scene_duration = max(
+                  4.0,
+                  narration_duration / base_scene_count
+              )
+
+              scene_durations = [
+                  scene_duration
+                  for _ in range(base_scene_count)
+              ]
+
+              total_duration = sum(scene_durations)
+
+              print(
+                  f"Visual duration: {total_duration:.2f}s"
+              )
+
+              # Generate video.
+              raw_video = TEMP / "raw_video.mp4"
+
+              render_video(
+                  fact["theme"],
+                  scene_durations,
                   raw_video
               )
 
-              # --------------------------------------------------------
-              # Generate voice in THREE pieces.
-              #
-              # This is what fixes the subtitle timing.
-              # --------------------------------------------------------
-
-              hook_audio = make_voice_part(
-                  hook,
-                  "voice_hook.wav"
-              )
-
-              fact_audio = make_voice_part(
-                  fact_text,
-                  "voice_fact.wav"
-              )
-
-              ending_audio = make_voice_part(
-                  ending,
-                  "voice_ending.wav"
-              )
-
-              audio_parts = [
-                  (hook, hook_audio),
-                  (fact_text, fact_audio),
-                  (ending, ending_audio)
-              ]
-
-              voice_duration = (
-                  duration(hook_audio)
-                  + duration(fact_audio)
-                  + duration(ending_audio)
-              )
-
-              print(
-                  "Total narration duration:",
-                  voice_duration
-              )
-
-              if voice_duration > 19.2:
-                  raise RuntimeError(
-                      "Narration is too long for the 20 second Short."
-                  )
-
-              # --------------------------------------------------------
-              # Captions based on ACTUAL Piper audio durations.
-              # --------------------------------------------------------
-
-              captions = OUT / "captions.ass"
-
-              create_captions(
-                  audio_parts,
-                  captions
-              )
-
-              # --------------------------------------------------------
-              # Music
-              # --------------------------------------------------------
-
-              music = OUT / "music.wav"
-
-              create_music(music)
-
-              # --------------------------------------------------------
-              # Overlay
-              # --------------------------------------------------------
-
-              graphics = OUT / "graphics.mp4"
-
-              add_overlay(
-                  raw_video,
-                  captions,
-                  graphics
-              )
-
-              # --------------------------------------------------------
-              # Final audio/video
-              # --------------------------------------------------------
-
-              final_video = OUT / "block_fuel_short.mp4"
+              # Combine narration.
+              voice_full = TEMP / "voice_full.wav"
 
               combine_audio(
-                  graphics,
-                  [hook_audio, fact_audio, ending_audio],
-                  music,
-                  final_video
+                  audio_files,
+                  voice_full
               )
 
-              # --------------------------------------------------------
-              # Metadata
-              # --------------------------------------------------------
+              # Music.
+              music = TEMP / "music.wav"
 
-              title_options = [
-                  "You probably didn't know this Minecraft fact",
-                  "This Minecraft mechanic is easy to miss",
-                  "Most Minecraft players don't know this",
-                  "Minecraft has a mechanic like THIS?",
-                  "You probably never noticed this in Minecraft",
-                  "This Minecraft fact is actually wild"
-              ]
+              make_music(
+                  total_duration,
+                  music
+              )
 
-              title = random.choice(title_options)
+              # Subtitles based on actual measured audio durations.
+              subtitles = TEMP / "captions.ass"
 
-              description = (
-                  fact_text
-                  + "\n\n"
-                  + "Minecraft facts, mechanics and secrets."
-                  + "\n"
-                  + "New Shorts from Block Fuel."
-                  + "\n\n"
-                  + "Footage provided by Pexels."
-                  + "\n"
-                  + "https://www.pexels.com/"
-                  + "\n\n"
-                  + "#Minecraft #MinecraftFacts #Gaming #Shorts"
+              subtitle_sections = list(
+                  zip(
+                      sentences,
+                      audio_durations
+                  )
+              )
+
+              create_ass(
+                  subtitle_sections,
+                  subtitles
+              )
+
+              # Final MP4.
+              final = OUT / "block_fuel_short.mp4"
+
+              compose_video(
+                  raw_video,
+                  voice_full,
+                  music,
+                  subtitles,
+                  final,
+                  total_duration
+              )
+
+              validate_video(final)
+
+              # Title.
+              title = (
+                  fact["title"]
+                  + " | Minecraft Facts #shorts"
               )
 
               (OUT / "title.txt").write_text(
@@ -1320,85 +2008,62 @@ jobs:
                   encoding="utf-8"
               )
 
+              # Description.
+              description = (
+                  fact["fact"]
+                  + "\n\n"
+                  + "Follow for more Minecraft facts!"
+                  + "\n\n"
+                  + "#Minecraft #MinecraftFacts #Shorts"
+              )
+
               (OUT / "description.txt").write_text(
                   description,
                   encoding="utf-8"
               )
 
+              # Fact metadata.
+              metadata = (
+                  "{\n"
+                  f'  "topic": "{fact["topic"]}",\n'
+                  f'  "title": "{fact["title"]}",\n'
+                  f'  "theme": "{fact["theme"]}",\n'
+                  f'  "duration": {total_duration:.2f}\n'
+                  "}\n"
+              )
+
               (OUT / "fact.json").write_text(
-                  json.dumps(
-                      {
-                          "fact": fact_text,
-                          "search": fact["search"],
-                          "voice": "en_GB-alan-medium",
-                          "real_web_footage": True,
-                          "source": "Pexels",
-                          "video_duration": duration(final_video),
-                          "narration_duration": voice_duration
-                      },
-                      indent=2
-                  ),
+                  metadata,
                   encoding="utf-8"
               )
 
-              # --------------------------------------------------------
-              # HARD CHECKS
-              # --------------------------------------------------------
-
-              final_duration = duration(final_video)
-
-              if final_duration < 19.0:
-                  raise RuntimeError(
-                      f"Final video is too short: {final_duration}"
-                  )
-
-              if final_duration > 20.5:
-                  raise RuntimeError(
-                      f"Final video is too long: {final_duration}"
-                  )
-
               print()
-              print("=" * 70)
-              print("SUCCESS")
-              print("=" * 70)
-              print("Video:", final_video)
-              print("Duration:", final_duration)
-              print("Narration:", voice_duration)
-              print("Real footage: YES")
-              print("=" * 70)
+              print("=" * 60)
+              print("BLOCK FUEL COMPLETE")
+              print("=" * 60)
+              print("Video:", final)
+              print("Title:", title)
+              print("Duration:", f"{total_duration:.2f}s")
 
 
           if __name__ == "__main__":
               main()
+
           PY
 
       - name: Generate Short
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
           python generator/main.py
 
-      - name: Verify final video
+      - name: List output
         run: |
-          test -s output/block_fuel_short.mp4
+          echo "Generated files:"
+          ls -lh output/
 
-          ffprobe \
-            -v error \
-            -show_entries format=duration \
-            -show_entries stream=codec_name,width,height \
-            -of default=noprint_wrappers=1 \
-            output/block_fuel_short.mp4
-
-          echo "FINAL VIDEO:"
-          ls -lh output/block_fuel_short.mp4
-
-      - name: Upload Short
+      - name: Upload finished Short
         uses: actions/upload-artifact@v4
         with:
           name: block-fuel-short-${{ github.run_number }}
-          path: |
-            output/block_fuel_short.mp4
-            output/title.txt
-            output/description.txt
-            output/fact.json
+          path: output/
           retention-days: 7
+          if-no-files-found: error
